@@ -16,7 +16,6 @@ from telegram.ext import (
     CallbackQueryHandler,
     ContextTypes,
     filters,
-    PicklePersistence, # Добавляем для сохранения данных
 )
 import gspread
 from google.oauth2.service_account import Credentials
@@ -39,7 +38,6 @@ logger = logging.getLogger(__name__)
 
 
 # --- ФУНКЦИИ ДЛЯ РАБОТЫ С GOOGLE SHEETS ---
-# (Остаются без изменений)
 def get_gspread_client():
     try:
         creds_json_str = os.getenv("GOOGLE_CREDS_JSON")
@@ -84,19 +82,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     Начинает диалог. Проверяет, есть ли сохраненные данные об инициаторе.
     """
-    # Очищаем данные предыдущей *незавершенной* заявки
-    form_keys = ['email', 'fio_initiator', 'job_title', 'owner_last_name', 'owner_first_name', 
-                 'reason', 'card_type', 'card_number', 'category', 'amount', 'frequency', 'comment']
-    for key in form_keys:
-        if key in context.user_data:
-            del context.user_data[key]
-
-    # Проверяем, есть ли сохраненные данные об инициаторе
+    # Проверяем, есть ли сохраненные данные об инициаторе в user_data
     if context.user_data.get('initiator_fio'):
         fio = context.user_data['initiator_fio']
         email = context.user_data['initiator_email']
         job = context.user_data['initiator_job_title']
-        
+
         text = (
             f"Здравствуйте! Найдена сохраненная информация о вас:\n\n"
             f"👤 **ФИО:** {fio}\n"
@@ -127,7 +118,7 @@ async def handle_reuse_choice(update: Update, context: ContextTypes.DEFAULT_TYPE
         context.user_data['email'] = context.user_data['initiator_email']
         context.user_data['fio_initiator'] = context.user_data['initiator_fio']
         context.user_data['job_title'] = context.user_data['initiator_job_title']
-        
+
         await query.edit_message_text("Отлично! Данные инициатора заполнены.")
         await query.message.reply_text("Теперь введите **Фамилию** владельца карты.")
         return OWNER_LAST_NAME
@@ -279,7 +270,14 @@ async def submit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     keyboard = [["Подать новую заявку"]]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
     await context.bot.send_message(chat_id=query.message.chat_id, text="Чтобы подать еще одну заявку, нажмите на кнопку ниже 👇", reply_markup=reply_markup)
-    context.user_data.clear()
+    
+    # Очищаем только данные формы, оставляя данные инициатора
+    form_keys = ['owner_last_name', 'owner_first_name', 'reason', 'card_type', 'card_number', 
+                 'category', 'amount', 'frequency', 'comment', 'email', 'fio_initiator', 'job_title']
+    for key in form_keys:
+        if key in context.user_data:
+            del context.user_data[key]
+            
     return ConversationHandler.END
 
 async def restart_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -290,7 +288,7 @@ async def restart_conversation(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("Действие отменено.")
-    context.user_data.clear()
+    context.user_data.clear() # Полная очистка при отмене
     return ConversationHandler.END
 
 
@@ -301,11 +299,8 @@ def main() -> None:
         logger.error("Не найден токен TELEGRAM_BOT_TOKEN.")
         return
 
-    # Создаем объект persistence
-    persistence = PicklePersistence(filepath="bot_loyalty_data")
-
-    # Добавляем persistence в builder
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).persistence(persistence).build()
+    # Убрали PicklePersistence
+    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
     conv_handler = ConversationHandler(
         entry_points=[
@@ -332,9 +327,7 @@ def main() -> None:
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
-        # Добавляем persistence в сам ConversationHandler
-        persistent=True,
-        name="loyalty_conversation"
+        # Убрали persistent=True и name, так как они требуют PicklePersistence
     )
 
     application.add_handler(conv_handler)
