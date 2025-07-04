@@ -46,24 +46,42 @@ def get_gspread_client():
             scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
             creds = Credentials.from_service_account_info(creds_info, scopes=scopes)
             return gspread.authorize(creds)
-        else:
-            logger.error("Переменная окружения GOOGLE_CREDS_JSON не найдена.")
-            return None
     except Exception as e:
         logger.error(f"Ошибка аутентификации в Google Sheets: {e}")
-        return None
+    return None
 
-def write_to_sheet(data: dict, submission_time: str, tg_handle: str):
+def find_last_entry_in_sheet(user_id: str):
+    """Ищет последнюю запись пользователя в таблице и возвращает его данные."""
+    client = get_gspread_client()
+    if not client:
+        return None
+    try:
+        sheet = client.open_by_key(os.getenv("GOOGLE_SHEET_KEY")).sheet1
+        # Ищем ID пользователя во втором столбце (B)
+        cell_list = sheet.findall(user_id, in_column=2)
+        if cell_list:
+            # Берем самую последнюю найденную запись
+            last_cell = cell_list[-1]
+            row_data = sheet.row_values(last_cell.row)
+            # Предполагаем порядок столбцов: A:Дата, B:ТГ, C:Почта, D:ФИО, E:Должность
+            if len(row_data) >= 5:
+                return {
+                    "email": row_data[2],
+                    "fio": row_data[3],
+                    "job_title": row_data[4]
+                }
+    except Exception as e:
+        logger.error(f"Ошибка при поиске данных в таблице: {e}")
+    return None
+
+def write_to_sheet(data: dict, submission_time: str, tg_user_id: str):
     client = get_gspread_client()
     if not client:
         return False
-    sheet_key = os.getenv("GOOGLE_SHEET_KEY")
-    if not sheet_key:
-        return False
     try:
-        sheet = client.open_by_key(sheet_key).sheet1
+        sheet = client.open_by_key(os.getenv("GOOGLE_SHEET_KEY")).sheet1
         row_to_insert = [
-            submission_time, tg_handle, data.get('email', ''), data.get('fio_initiator', ''),
+            submission_time, tg_user_id, data.get('email', ''), data.get('fio_initiator', ''),
             data.get('job_title', ''), data.get('owner_last_name', ''), data.get('owner_first_name', ''),
             data.get('reason', ''), data.get('card_type', ''), data.get('card_number', ''),
             data.get('category', ''), data.get('amount', ''), data.get('frequency', ''),
@@ -73,23 +91,28 @@ def write_to_sheet(data: dict, submission_time: str, tg_handle: str):
         return True
     except Exception as e:
         logger.error(f"Не удалось записать данные в таблицу: {e}")
-        return False
+    return False
 
 
 # --- НОВАЯ ЛОГИКА ДИАЛОГА ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """
-    Начинает диалог. Проверяет, есть ли сохраненные данные об инициаторе.
-    """
-    # Проверяем, есть ли сохраненные данные об инициаторе в user_data
-    if context.user_data.get('initiator_fio'):
-        fio = context.user_data['initiator_fio']
-        email = context.user_data['initiator_email']
-        job = context.user_data['initiator_job_title']
+    """Начинает диалог. Ищет данные инициатора в Google Таблице."""
+    context.user_data.clear()
+    user_id = str(update.effective_user.id)
+    chat = update.effective_chat
+
+    # Ищем последние данные пользователя в таблице
+    initiator_data = find_last_entry_in_sheet(user_id)
+
+    if initiator_data:
+        context.user_data['found_initiator_data'] = initiator_data
+        fio = initiator_data['fio']
+        email = initiator_data['email']
+        job = initiator_data['job_title']
 
         text = (
-            f"Здравствуйте! Найдена сохраненная информация о вас:\n\n"
+            f"Здравствуйте! Найдена ваша предыдущая запись в таблице:\n\n"
             f"👤 **ФИО:** {fio}\n"
             f"📧 **Почта:** {email}\n"
             f"🏢 **Должность:** {job}\n\n"
@@ -99,25 +122,24 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             [InlineKeyboardButton("✅ Да, использовать", callback_data="reuse_data")],
             [InlineKeyboardButton("✏️ Ввести заново", callback_data="enter_new_data")],
         ]
-        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
+        await chat.send_message(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
         return REUSE_DATA
     else:
-        await update.message.reply_text(
+        await chat.send_message(
             "Здравствуйте! Начинаем процесс регистрации карты лояльности.\n\n"
             "Пожалуйста, введите вашу рабочую электронную почту."
         )
         return EMAIL
 
 async def handle_reuse_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обрабатывает выбор пользователя: использовать старые данные или ввести новые."""
     query = update.callback_query
     await query.answer()
 
     if query.data == 'reuse_data':
-        # Копируем сохраненные данные в текущую форму
-        context.user_data['email'] = context.user_data['initiator_email']
-        context.user_data['fio_initiator'] = context.user_data['initiator_fio']
-        context.user_data['job_title'] = context.user_data['initiator_job_title']
+        found_data = context.user_data.pop('found_initiator_data', {})
+        context.user_data['email'] = found_data.get('email')
+        context.user_data['fio_initiator'] = found_data.get('fio')
+        context.user_data['job_title'] = found_data.get('job_title')
 
         await query.edit_message_text("Отлично! Данные инициатора заполнены.")
         await query.message.reply_text("Теперь введите **Фамилию** владельца карты.")
@@ -128,27 +150,17 @@ async def handle_reuse_choice(update: Update, context: ContextTypes.DEFAULT_TYPE
         return EMAIL
 
 async def get_email(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    email = update.message.text
-    if not re.match(r"[^@]+@[^@]+\.[^@]+", email):
-        await update.message.reply_text("Формат почты неверный. Пожалуйста, попробуйте еще раз.")
-        return EMAIL
-
-    context.user_data['email'] = email
-    context.user_data['initiator_email'] = email # Сохраняем для будущего использования
+    context.user_data['email'] = update.message.text
     await update.message.reply_text("Отлично! Теперь введите ваше ФИО (полностью).")
     return FIO_INITIATOR
 
 async def get_fio_initiator(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    fio = update.message.text
-    context.user_data['fio_initiator'] = fio
-    context.user_data['initiator_fio'] = fio # Сохраняем для будущего использования
+    context.user_data['fio_initiator'] = update.message.text
     await update.message.reply_text("Принято. Введите вашу должность в компании (можно сокращенно).")
     return JOB_TITLE
 
 async def get_job_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    job = update.message.text
-    context.user_data['job_title'] = job
-    context.user_data['initiator_job_title'] = job # Сохраняем для будущего использования
+    context.user_data['job_title'] = update.message.text
     await update.message.reply_text("Спасибо. Теперь введите **Фамилию** владельца карты.")
     return OWNER_LAST_NAME
 
@@ -180,7 +192,7 @@ async def get_card_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 async def get_card_number(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     number = update.message.text
     if not (number.startswith('8') and number[1:].isdigit() and len(number) == 11):
-        await update.message.reply_text("Неверный формат. Номер должен начинаться с 8 и содержать 11 цифр. Например: 89991234567")
+        await update.message.reply_text("Неверный формат. Номер должен начинаться с 8 и содержать 11 цифр.")
         return CARD_NUMBER
     context.user_data['card_number'] = number
     keyboard = [
@@ -197,7 +209,7 @@ async def get_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     await query.answer()
     context.user_data['category'] = query.data
     card_type = context.user_data.get('card_type')
-    prompt = "Введите сумму бартера (только цифры):" if card_type == "Бартер" else "Введите процент скидки (только цифры, например, 15):"
+    prompt = "Введите сумму бартера:" if card_type == "Бартер" else "Введите процент скидки:"
     await query.edit_message_text(text=f"Выбрана статья: {query.data}.\n\n{prompt}")
     return AMOUNT
 
@@ -219,7 +231,7 @@ async def get_frequency(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     query = update.callback_query
     await query.answer()
     context.user_data['frequency'] = query.data
-    await query.edit_message_text(text=f"Выбрано: {query.data}.\n\nПоследний шаг: введите комментарий (например, к какому бару привязка).")
+    await query.edit_message_text(text=f"Выбрано: {query.data}.\n\nПоследний шаг: введите комментарий.")
     return COMMENT
 
 def format_summary(data: dict) -> str:
@@ -228,13 +240,12 @@ def format_summary(data: dict) -> str:
     amount_label = "Скидка" if card_type == 'Скидка' else "Сумма"
     amount_value = f"{data.get('amount', '0')}{'%' if card_type == 'Скидка' else ' ₽'}"
     summary = (
-        "Пожалуйста, проверьте данные перед сохранением.\n\n"
-        "--- \n"
+        "Пожалуйста, проверьте данные:\n\n"
         "<b>Инициатор</b>\n"
         f"👤 ФИО: {data.get('fio_initiator', '-')}\n"
         f"📧 Почта: {data.get('email', '-')}\n"
         f"🏢 Должность: {data.get('job_title', '-')}\n"
-        "--- \n"
+        "---\n"
         "<b>Карта лояльности</b>\n"
         f"💳 Владелец: {owner_full_name}\n"
         f"📞 Номер: {data.get('card_number', '-')}\n"
@@ -243,7 +254,7 @@ def format_summary(data: dict) -> str:
         f"📈 Статья: {data.get('category', '-')}\n"
         f"🔄 Периодичность: {data.get('frequency', '-')}\n"
         f"💬 Комментарий: {data.get('comment', '-')}\n"
-        "--- \n\n"
+        "---\n\n"
         "Все верно?"
     )
     return summary
@@ -259,10 +270,8 @@ async def submit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
     await query.edit_message_text(text="Сохраняю данные...")
-    user = query.from_user
-    tg_handle = f"@{user.username}" if user.username else f"ID: {user.id}"
-    submission_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    success = write_to_sheet(context.user_data, submission_time, tg_handle)
+    user_id = str(query.from_user.id)
+    success = write_to_sheet(context.user_data, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), user_id)
     if success:
         await query.edit_message_text(text="✅ Готово! Данные успешно записаны в таблицу.")
     else:
@@ -270,25 +279,20 @@ async def submit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     keyboard = [["Подать новую заявку"]]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
     await context.bot.send_message(chat_id=query.message.chat_id, text="Чтобы подать еще одну заявку, нажмите на кнопку ниже 👇", reply_markup=reply_markup)
-    
-    # Очищаем только данные формы, оставляя данные инициатора
-    form_keys = ['owner_last_name', 'owner_first_name', 'reason', 'card_type', 'card_number', 
-                 'category', 'amount', 'frequency', 'comment', 'email', 'fio_initiator', 'job_title']
-    for key in form_keys:
-        if key in context.user_data:
-            del context.user_data[key]
-            
+    context.user_data.clear()
     return ConversationHandler.END
 
 async def restart_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """ИСПРАВЛЕНО: Корректно перезапускает диалог, вызывая start."""
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text("Хорошо, давайте начнем сначала.")
-    return await start(query.message, context)
+    await query.edit_message_text("Начинаем заново...")
+    # Передаем оригинальный update в start, чтобы он мог извлечь chat_id
+    return await start(update, context)
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("Действие отменено.")
-    context.user_data.clear() # Полная очистка при отмене
+    context.user_data.clear()
     return ConversationHandler.END
 
 
@@ -299,7 +303,6 @@ def main() -> None:
         logger.error("Не найден токен TELEGRAM_BOT_TOKEN.")
         return
 
-    # Убрали PicklePersistence
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
     conv_handler = ConversationHandler(
@@ -327,7 +330,6 @@ def main() -> None:
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
-        # Убрали persistent=True и name, так как они требуют PicklePersistence
     )
 
     application.add_handler(conv_handler)
