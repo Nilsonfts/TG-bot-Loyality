@@ -55,7 +55,6 @@ def get_gspread_client():
     return None
 
 def get_all_user_cards_from_sheet(user_id: str) -> list:
-    """Находит ВСЕ записи пользователя в таблице и возвращает их списком."""
     client = get_gspread_client()
     if not client: return []
     try:
@@ -66,15 +65,11 @@ def get_all_user_cards_from_sheet(user_id: str) -> list:
             row = sheet.row_values(cell.row)
             if len(row) >= 19:
                 card_info = {
-                    "date": row[0], "tg_id": row[1], "initiator_email": row[2],
-                    "initiator_fio": row[3], "initiator_job": row[4],
-                    "owner_last_name": row[5], "owner_first_name": row[6],
-                    "reason": row[7], "card_type": row[8], "card_number": row[9],
-                    "category": row[10], "amount": row[11], "frequency": row[12],
-                    "comment": row[13], "status_q": row[16] or "–", "status_s": row[18] or "–"
+                    "date": row[0], "owner_first_name": row[6], "owner_last_name": row[5],
+                    "card_number": row[9], "status_q": row[16] or "–", "status_s": row[18] or "–"
                 }
                 cards.append(card_info)
-        return list(reversed(cards)) # Новые сверху
+        return list(reversed(cards))
     except Exception as e:
         logger.error(f"Ошибка при поиске карт пользователя: {e}")
     return []
@@ -84,22 +79,48 @@ def write_to_sheet(data: dict, submission_time: str, tg_user_id: str):
     if not client: return False
     try:
         sheet = client.open_by_key(os.getenv("GOOGLE_SHEET_KEY")).sheet1
+        # Формируем строку ровно из 19 элементов, чтобы соответствовать столбцам A-S
+        # 14 элементов с данными + 5 пустых строк для столбцов N, O, P, R, T
         row_to_insert = [
             submission_time, tg_user_id, data.get('email', ''), data.get('fio_initiator', ''),
             data.get('job_title', ''), data.get('owner_last_name', ''), data.get('owner_first_name', ''),
             data.get('reason', ''), data.get('card_type', ''), data.get('card_number', ''),
             data.get('category', ''), data.get('amount', ''), data.get('frequency', ''),
-            data.get('comment', ''), '', '', '', '', '', '' # Добавляем пустые ячейки до S
+            data.get('comment', ''), '', '', '', '', '' # Пустые ячейки для столбцов N, O, P, R. Статусы Q и S заполняются вручную.
         ]
-        sheet.append_row(row_to_insert)
+        sheet.append_row(row_to_insert, value_input_option='USER_ENTERED')
         return True
     except Exception as e:
         logger.error(f"Не удалось записать данные в таблицу: {e}")
     return False
 
+# --- ГЛАВНОЕ МЕНЮ И СИСТЕМА НАВИГАЦИИ ---
+async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Отправляет главное меню с основными функциями."""
+    keyboard = [
+        ["✍️ Подать заявку", "🗂️ Мои Карты"],
+        ["🔍 Поиск", "❓ Помощь"]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    await update.message.reply_text(
+        "Добро пожаловать! Выберите действие:",
+        reply_markup=reply_markup
+    )
+
+async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Отправляет справочное сообщение."""
+    help_text = (
+        "<b>Справка по боту</b>\n\n"
+        "▫️ <b>Подать заявку</b> - запуск пошаговой анкеты для регистрации новой карты лояльности.\n\n"
+        "▫️ <b>Мои Карты</b> - просмотр всех поданных вами заявок со статусами.\n\n"
+        "▫️ <b>Поиск</b> - поиск по вашим заявкам (по имени, фамилии или номеру телефона).\n\n"
+        "Бот автоматически запоминает данные инициатора (вас) для ускорения процесса в будущем. "
+        "По всем техническим вопросам обращайтесь к администратору."
+    )
+    await update.message.reply_text(help_text, parse_mode=ParseMode.HTML)
+
 # --- ОБЩАЯ СИСТЕМА ПАГИНАЦИИ ---
 async def display_paginated_list(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int, data_key: str, list_title: str, message_to_edit):
-    """Универсальная функция для отображения любого списка с пагинацией."""
     all_items = context.user_data.get(data_key, [])
     if not all_items:
         await message_to_edit.edit_text("🤷 Ничего не найдено.")
@@ -134,7 +155,6 @@ async def display_paginated_list(update: Update, context: ContextTypes.DEFAULT_T
     await message_to_edit.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
 
 async def handle_pagination(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обрабатывает нажатия на любые кнопки пагинации."""
     query = update.callback_query
     await query.answer()
     _, data_key, page_str = query.data.split('_')
@@ -146,8 +166,8 @@ async def handle_pagination(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 async def noop_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.callback_query.answer()
 
-# --- КОМАНДА /mycards ---
-async def show_my_cards(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+# --- ФУНКЦИИ КОМАНД МЕНЮ ---
+async def my_cards_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = str(update.effective_user.id)
     loading_message = await update.message.reply_text("🔍 Загружаю ваши заявки из таблицы...")
     all_cards = get_all_user_cards_from_sheet(user_id)
@@ -157,14 +177,11 @@ async def show_my_cards(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     context.user_data['mycards'] = all_cards
     await display_paginated_list(update, context, page=0, data_key='mycards', list_title="Ваши поданные заявки", message_to_edit=loading_message)
 
-# --- НОВЫЙ ДИАЛОГ ПОИСКА: /search ---
-async def start_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Начинает диалог поиска."""
+async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("Введите, что вы хотите найти (имя, фамилию или номер телефона):")
     return AWAIT_SEARCH_QUERY
 
 async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Выполняет поиск по картам пользователя."""
     user_id = str(update.effective_user.id)
     search_query = update.message.text.lower()
     loading_message = await update.message.reply_text("🔍 Выполняю поиск...")
@@ -185,61 +202,36 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await display_paginated_list(update, context, page=0, data_key='search', list_title="Результаты поиска", message_to_edit=loading_message)
     return ConversationHandler.END
 
-# --- ОСНОВНОЙ ДИАЛОГ ПОДАЧИ ЗАЯВКИ ---
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    # ... (код этой функции и всех шагов анкеты остается таким же, как в прошлый раз)
-    # Я его включу в финальный блок для полноты
+
+# --- ДИАЛОГ ПОДАЧИ ЗАЯВКИ ---
+async def start_form_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = str(update.effective_user.id)
     chat = update.effective_chat
+    
     if context.user_data.get('initiator_fio'):
         initiator_data = {
-            "fio": context.user_data['initiator_fio'],
-            "email": context.user_data['initiator_email'],
-            "job_title": context.user_data['initiator_job_title']
+            "fio": context.user_data.get('initiator_fio'), "email": context.user_data.get('initiator_email'),
+            "job_title": context.user_data.get('initiator_job_title')
         }
     else:
-        initiator_data = None # Будет None, если это первый запуск
-    #... и так далее
-    # Для краткости здесь опускаю, но в финальном коде он будет полностью.
-    # ... (весь остальной код анкеты)
-
-# --- Полный код всех функций анкеты для копирования ---
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user_id = str(update.effective_user.id)
-    chat = update.effective_chat
+        initiator_data = None
     
-    initiator_data = context.user_data.get('initiator_fio') and {
-        "fio": context.user_data.get('initiator_fio'),
-        "email": context.user_data.get('initiator_email'),
-        "job_title": context.user_data.get('initiator_job_title')
-    }
-    
-    form_keys_to_clear = [
-        'owner_last_name', 'owner_first_name', 'reason', 'card_type', 'card_number',
-        'category', 'amount', 'frequency', 'comment', 'email', 'fio_initiator', 'job_title'
-    ]
-    for key in form_keys_to_clear:
-        if key in context.user_data:
-            del context.user_data[key]
+    form_keys = ['owner_last_name', 'owner_first_name', 'reason', 'card_type', 'card_number', 'category', 'amount', 'frequency', 'comment', 'email', 'fio_initiator', 'job_title']
+    for key in form_keys:
+        if key in context.user_data: del context.user_data[key]
 
     if initiator_data:
-        text = (
-            f"Здравствуйте! Используем сохраненные данные инициатора:\n\n"
-            f"👤 <b>ФИО:</b> {initiator_data['fio']}\n"
-            f"📧 <b>Почта:</b> {initiator_data['email']}\n"
-            f"🏢 <b>Должность:</b> {initiator_data['job_title']}\n\n"
-            f"Продолжить с этими данными?"
-        )
-        keyboard = [
-            [InlineKeyboardButton("✅ Да, продолжить", callback_data="reuse_data")],
-            [InlineKeyboardButton("✏️ Ввести заново", callback_data="enter_new_data")],
-        ]
+        text = (f"Здравствуйте! Используем сохраненные данные инициатора:\n\n"
+                f"👤 <b>ФИО:</b> {initiator_data['fio']}\n📧 <b>Почта:</b> {initiator_data['email']}\n"
+                f"🏢 <b>Должность:</b> {initiator_data['job_title']}\n\nПродолжить с этими данными?")
+        keyboard = [[InlineKeyboardButton("✅ Да", callback_data="reuse_data"), InlineKeyboardButton("✏️ Ввести заново", callback_data="enter_new_data")]]
         await chat.send_message(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
         return REUSE_DATA
     else:
-        await chat.send_message("Здравствуйте! Начинаем процесс регистрации.\n\nВведите вашу рабочую почту.")
+        await chat.send_message("Начинаем процесс регистрации.\n\nВведите вашу рабочую почту.")
         return EMAIL
 
+# ... (все функции get_... и format_summary остаются здесь)
 async def handle_reuse_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
@@ -337,7 +329,7 @@ def format_summary(data: dict) -> str:
     amount_label = "Скидка" if card_type == 'Скидка' else "Сумма"
     amount_value = f"{data.get('amount', '0')}{'%' if card_type == 'Скидка' else ' ₽'}"
     return (
-        "<b>Проверьте заявку:</b>\n\n"
+        "<b>Проверьте заявку:</b>\n"
         "<b>Инициатор:</b> {fio}, {job}, {email}\n"
         "<b>Владелец:</b> {owner}\n"
         "<b>Карта:</b> {num}, {type}\n"
@@ -366,8 +358,8 @@ async def submit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await query.edit_message_text("✅ Готово! Заявка записана.")
     else:
         await query.edit_message_text("❌ Ошибка при записи в таблицу.")
-    keyboard = [["Подать новую заявку"]]
-    await context.bot.send_message(query.message.chat_id, "Нажмите кнопку, чтобы начать заново 👇", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True))
+    # Возвращаемся в главное меню, отправляя ту же клавиатуру
+    await show_main_menu(query.message, context)
     context.user_data.clear()
     return ConversationHandler.END
 
@@ -375,13 +367,13 @@ async def restart_conversation(update: Update, context: ContextTypes.DEFAULT_TYP
     query = update.callback_query
     await query.answer()
     await query.edit_message_text("Начинаем заново...")
-    return await start(update, context)
+    return await start_form_conversation(update, context)
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("Действие отменено.")
-    if 'search' in context.user_data: del context.user_data['search']
-    if 'mycards' in context.user_data: del context.user_data['mycards']
+    await show_main_menu(update.message, context)
     return ConversationHandler.END
+
 
 # --- ОСНОВНАЯ ФУНКЦИЯ ЗАПУСКА БОТА ---
 def main() -> None:
@@ -392,8 +384,8 @@ def main() -> None:
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
     # Диалог для подачи заявки
-    form_conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("start", start), MessageHandler(filters.Regex("^Подать новую заявку$"), start)],
+    form_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex("^✍️ Подать заявку$"), start_form_conversation)],
         states={
             REUSE_DATA: [CallbackQueryHandler(handle_reuse_choice)],
             EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_email)],
@@ -417,17 +409,17 @@ def main() -> None:
     )
 
     # Диалог для поиска
-    search_conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("search", start_search)],
-        states={
-            AWAIT_SEARCH_QUERY: [MessageHandler(filters.TEXT & ~filters.COMMAND, perform_search)],
-        },
+    search_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex("^🔍 Поиск$"), search_command)],
+        states={ AWAIT_SEARCH_QUERY: [MessageHandler(filters.TEXT & ~filters.COMMAND, perform_search)] },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
 
-    application.add_handler(form_conv_handler)
-    application.add_handler(search_conv_handler)
-    application.add_handler(CommandHandler("mycards", show_my_cards))
+    application.add_handler(CommandHandler("start", show_main_menu))
+    application.add_handler(form_conv)
+    application.add_handler(search_conv)
+    application.add_handler(MessageHandler(filters.Regex("^🗂️ Мои Карты$"), my_cards_command))
+    application.add_handler(MessageHandler(filters.Regex("^❓ Помощь$"), show_help))
     application.add_handler(CallbackQueryHandler(handle_pagination, pattern=r"^paginate_"))
     application.add_handler(CallbackQueryHandler(noop_callback, pattern=r"^noop$"))
     
