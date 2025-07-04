@@ -20,7 +20,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 # --- НАСТРОЙКИ И ПЕРЕМЕННЫЕ ---
-# Эти переменные должны быть установлены на вашем хостинге (например, Railway)
+# Убедитесь, что эти переменные установлены на вашем хостинге (Railway)
 # 1. TELEGRAM_BOT_TOKEN: Секретный токен вашего бота от BotFather.
 # 2. GOOGLE_CREDS_JSON: Полное содержимое вашего JSON-файла с учетными данными.
 # 3. GOOGLE_SHEET_KEY: ID (ключ) вашей Google Таблицы из ее URL-адреса.
@@ -70,7 +70,7 @@ def write_to_sheet(data: dict):
     if not sheet_key:
         logger.error("Переменная окружения GOOGLE_SHEET_KEY не найдена!")
         return False
-        
+
     try:
         sheet = client.open_by_key(sheet_key).sheet1
         row_to_insert = [
@@ -114,7 +114,7 @@ async def get_email(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not re.match(r"[^@]+@[^@]+\.[^@]+", email):
         await update.message.reply_text("Формат почты неверный. Пожалуйста, попробуйте еще раз.")
         return EMAIL
-    
+
     context.user_data['email'] = email
     await update.message.reply_text("Отлично! Теперь введите ваше ФИО (полностью).")
     return FIO_INITIATOR
@@ -180,21 +180,21 @@ async def get_card_number(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text("Выберите статью пополнения карты:", reply_markup=reply_markup)
     return CATEGORY
-    
+
 async def get_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Сохраняет категорию и запрашивает сумму/процент."""
     query = update.callback_query
     await query.answer()
     context.user_data['category'] = query.data
-    
+
     card_type = context.user_data.get('card_type')
     if card_type == "Бартер":
         prompt = "Введите сумму бартера (только цифры):"
     elif card_type == "Скидка":
         prompt = "Введите процент скидки (только цифры, например, 15):"
-    else: 
+    else:
         prompt = "Введите сумму или процент:"
-        
+
     await query.edit_message_text(text=f"Выбрана статья: {query.data}.\n\n{prompt}")
     return AMOUNT
 
@@ -206,7 +206,7 @@ async def get_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return AMOUNT
 
     context.user_data['amount'] = amount_text
-    
+
     keyboard = [
         [InlineKeyboardButton("Разовая", callback_data="Разовая")],
         [InlineKeyboardButton("Дополнить к балансу", callback_data="Дополнить к балансу")],
@@ -226,26 +226,27 @@ async def get_frequency(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     return COMMENT
 
 def format_summary(data: dict) -> str:
-    """Форматирует собранные данные для проверки (Современный и Сбалансированный стиль)."""
+    """Форматирует собранные данные для проверки (используя HTML для надежности)."""
     owner_full_name = f"{data.get('owner_last_name', '')} {data.get('owner_first_name', '')}".strip()
-    
+
     card_type = data.get('card_type')
     amount_label = "Скидка" if card_type == 'Скидка' else "Сумма"
     amount_value = f"{data.get('amount', '0')}{'%' if card_type == 'Скидка' else ' ₽'}"
 
+    # Используем HTML-теги <b>...</b> для надежного форматирования
     summary = (
         "Пожалуйста, проверьте данные перед сохранением.\n\n"
         "--- \n"
-        "**Инициатор**\n"
+        "<b>Инициатор</b>\n"
         f"👤 ФИО: {data.get('fio_initiator', '-')}\n"
         f"📧 Почта: {data.get('email', '-')}\n"
         f"🏢 Должность: {data.get('job_title', '-')}\n"
         "--- \n"
-        "**Карта лояльности**\n"
+        "<b>Карта лояльности</b>\n"
         f"💳 Владелец: {owner_full_name}\n"
         f"📞 Номер: {data.get('card_number', '-')}\n"
         f"✨ Тип: {card_type}\n"
-        f"💰 {amount_label}: {amount_value}\n"
+        f"💰 <b>{amount_label}:</b> {amount_value}\n"
         f"📈 Статья: {data.get('category', '-')}\n"
         f"🔄 Периодичность: {data.get('frequency', '-')}\n"
         f"💬 Комментарий: {data.get('comment', '-')}\n"
@@ -257,32 +258,33 @@ def format_summary(data: dict) -> str:
 async def get_comment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Сохраняет комментарий и показывает все данные для подтверждения."""
     context.user_data['comment'] = update.message.text
-    
+
     summary = format_summary(context.user_data)
-    
+
     keyboard = [
         [InlineKeyboardButton("✅ Да, все верно", callback_data="submit")],
         [InlineKeyboardButton("❌ Нет, заполнить заново", callback_data="restart")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.message.reply_text(summary, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2)
+
+    # Используем ParseMode.HTML для отправки сообщения
+    await update.message.reply_text(summary, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
     return CONFIRMATION
 
 async def submit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Записывает данные в таблицу и завершает диалог."""
     query = update.callback_query
     await query.answer()
-    
+
     await query.edit_message_text(text="Сохраняю данные...")
-    
+
     success = write_to_sheet(context.user_data)
-    
+
     if success:
         await query.edit_message_text(text="✅ Готово! Данные успешно записаны в таблицу.")
     else:
         await query.edit_message_text(text="❌ Произошла ошибка при записи в таблицу. Пожалуйста, свяжитесь с администратором.")
-        
+
     context.user_data.clear()
     return ConversationHandler.END
 
@@ -290,9 +292,7 @@ async def restart_conversation(update: Update, context: ContextTypes.DEFAULT_TYP
     """Обрабатывает 'Нет' на шаге подтверждения и начинает диалог заново."""
     query = update.callback_query
     await query.answer()
-    # Удаляем кнопки и сообщение с проверкой данных
     await query.edit_message_text("Хорошо, давайте начнем сначала.")
-    # Вызываем /start, чтобы начать новый диалог с чистого листа
     return await start(query.message, context)
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -313,7 +313,7 @@ def main() -> None:
         return
 
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    
+
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
@@ -338,7 +338,7 @@ def main() -> None:
     )
 
     application.add_handler(conv_handler)
-    
+
     logger.info("Бот запускается...")
     application.run_polling()
 
