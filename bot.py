@@ -1,9 +1,11 @@
+# -*- coding: utf-8 -*-
+
 import logging
 import os
 import re
 import json
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ParseMode
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -16,11 +18,13 @@ from telegram.ext import (
 import gspread
 from google.oauth2.service_account import Credentials
 
-# --- НАСТРОЙКИ ---
-# Получаем токен из переменных окружения (лучшая практика для хостинга)
+# --- НАСТРОЙКИ И ПЕРЕМЕННЫЕ ---
+# Эти переменные должны быть установлены на вашем хостинге (например, Railway)
+# 1. TELEGRAM_BOT_TOKEN: Секретный токен вашего бота от BotFather.
+# 2. GOOGLE_CREDS_JSON: Полное содержимое вашего JSON-файла с учетными данными.
+# 3. GOOGLE_SHEET_KEY: ID (ключ) вашей Google Таблицы из ее URL-адреса.
+
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-# Имя вашей Google Таблицы
-GOOGLE_SHEET_NAME = "База карт лояльности" 
 
 # --- Настройка логирования для отладки ---
 logging.basicConfig(
@@ -35,11 +39,12 @@ logger = logging.getLogger(__name__)
     FREQUENCY, COMMENT, CONFIRMATION
 ) = range(13)
 
-# --- Функции для работы с Google Sheets ---
+
+# --- ФУНКЦИИ ДЛЯ РАБОТЫ С GOOGLE SHEETS ---
+
 def get_gspread_client():
     """Настраивает и возвращает клиент для работы с Google Sheets."""
     try:
-        # Для Railway/Heroku и других хостингов, где учетные данные хранятся в переменной окружения
         creds_json_str = os.getenv("GOOGLE_CREDS_JSON")
         if creds_json_str:
             creds_info = json.loads(creds_json_str)
@@ -47,20 +52,26 @@ def get_gspread_client():
             creds = Credentials.from_service_account_info(creds_info, scopes=scopes)
             return gspread.authorize(creds)
         else:
-            # Для локального запуска (ищет файл credentials.json)
-            return gspread.service_account(filename="credentials.json")
+            logger.error("Переменная окружения GOOGLE_CREDS_JSON не найдена.")
+            return None
     except Exception as e:
         logger.error(f"Ошибка аутентификации в Google Sheets: {e}")
         return None
 
 def write_to_sheet(data: dict):
-    """Записывает данные в Google Таблицу."""
+    """Записывает данные в Google Таблицу, используя ключ (ID) из переменных окружения."""
     client = get_gspread_client()
     if not client:
+        logger.error("Не удалось получить gspread client.")
         return False
+
+    sheet_key = os.getenv("GOOGLE_SHEET_KEY")
+    if not sheet_key:
+        logger.error("Переменная окружения GOOGLE_SHEET_KEY не найдена!")
+        return False
+        
     try:
-        sheet = client.open(GOOGLE_SHEET_NAME).sheet1
-        # Порядок должен соответствовать столбцам в вашей таблице
+        sheet = client.open_by_key(sheet_key).sheet1
         row_to_insert = [
             data.get('email', ''),
             data.get('fio_initiator', ''),
@@ -78,13 +89,14 @@ def write_to_sheet(data: dict):
         sheet.append_row(row_to_insert)
         return True
     except gspread.exceptions.SpreadsheetNotFound:
-        logger.error(f"Таблица с именем '{GOOGLE_SHEET_NAME}' не найдена.")
+        logger.error(f"Таблица с ключом '{sheet_key}' не найдена. Проверьте ID и права доступа.")
         return False
     except Exception as e:
         logger.error(f"Не удалось записать данные в таблицу: {e}")
         return False
 
-# --- Функции-шаги диалога ---
+
+# --- ФУНКЦИИ-ШАГИ ДИАЛОГА ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Начинает диалог и запрашивает email."""
@@ -98,7 +110,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 async def get_email(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Проверяет email и запрашивает ФИО."""
     email = update.message.text
-    # Простая проверка формата email
     if not re.match(r"[^@]+@[^@]+\.[^@]+", email):
         await update.message.reply_text("Формат почты неверный. Пожалуйста, попробуйте еще раз.")
         return EMAIL
@@ -128,7 +139,7 @@ async def get_owner_last_name(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def get_owner_first_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Сохраняет имя и запрашивает причину выдачи."""
     context.user_data['owner_first_name'] = update.message.text
-    await update.message.reply_text("Почти готово. Укажите причину выдачи карты (бартер/скидка).")
+    await update.message.reply_text("Укажите причину выдачи карты (бартер/скидка).")
     return REASON
 
 async def get_reason(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -180,7 +191,7 @@ async def get_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         prompt = "Введите сумму бартера (только цифры):"
     elif card_type == "Скидка":
         prompt = "Введите процент скидки (только цифры, например, 15):"
-    else: # На случай непредвиденной ошибки
+    else: 
         prompt = "Введите сумму или процент:"
         
     await query.edit_message_text(text=f"Выбрана статья: {query.data}.\n\n{prompt}")
@@ -214,29 +225,33 @@ async def get_frequency(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     return COMMENT
 
 def format_summary(data: dict) -> str:
-    """Форматирует собранные данные для проверки."""
+    """Форматирует собранные данные для проверки (Современный и Сбалансированный стиль)."""
+    owner_full_name = f"{data.get('owner_last_name', '')} {data.get('owner_first_name', '')}".strip()
+    
     card_type = data.get('card_type')
-    amount_label = "% скидки" if card_type == 'Скидка' else "Сумма бартера"
+    amount_label = "Скидка" if card_type == 'Скидка' else "Сумма"
+    amount_value = f"{data.get('amount', '0')}{'%' if card_type == 'Скидка' else ' ₽'}"
 
-    return (
-        "Пожалуйста, проверьте введенные данные:\n\n"
-        f"📧 Эл. почта инициатора: {data.get('email', '-')}\n"
-        f"👤 ФИО инициатора: {data.get('fio_initiator', '-')}\n"
-        f"👔 Должность: {data.get('job_title', '-')}\n"
-        "------------------------------------\n"
-        f"💳 Фамилия владельца: {data.get('owner_last_name', '-')}\n"
-        f"💳 **Имя владельца: {data.get('owner_first_name', '-')}\n"
-        f"🤔 **Причина выдачи: {data.get('reason', '-')}\n"
-        f"✨ **Тип карты: {card_type}\n"
-        f"📞 **Номер карты (тел): {data.get('card_number', '-')}\n"
-        
-        f"📈 **Статья пополнения: {data.get('category', '-')}\n"
-        f"💰 **{amount_label}: {data.get('amount', '-')}\n"
-        f"🔄 **Периодичность: {data.get('frequency', '-')}\n"
-        f"💬 **Комментарий: {data.get('comment', '-')}\n\n"
-        
+    summary = (
+        "Пожалуйста, проверьте данные перед сохранением.\n\n"
+        "--- \n"
+        "**Инициатор**\n"
+        f"👤 ФИО: {data.get('fio_initiator', '-')}\n"
+        f"📧 Почта: {data.get('email', '-')}\n"
+        f"🏢 Должность: {data.get('job_title', '-')}\n"
+        "--- \n"
+        "**Карта лояльности**\n"
+        f"💳 Владелец: {owner_full_name}\n"
+        f"📞 Номер: {data.get('card_number', '-')}\n"
+        f"✨ Тип: {card_type}\n"
+        f"💰 {amount_label}: {amount_value}\n"
+        f"📈 Статья: {data.get('category', '-')}\n"
+        f"🔄 Периодичность: {data.get('frequency', '-')}\n"
+        f"💬 Комментарий: {data.get('comment', '-')}\n"
+        "--- \n\n"
         "Все верно?"
     )
+    return summary
 
 async def get_comment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Сохраняет комментарий и показывает все данные для подтверждения."""
@@ -250,7 +265,7 @@ async def get_comment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await update.message.reply_text(summary, reply_markup=reply_markup, parse_mode='HTML')
+    await update.message.reply_text(summary, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2)
     return CONFIRMATION
 
 async def submit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -274,10 +289,10 @@ async def restart_conversation(update: Update, context: ContextTypes.DEFAULT_TYP
     """Обрабатывает 'Нет' на шаге подтверждения и начинает диалог заново."""
     query = update.callback_query
     await query.answer()
+    # Удаляем кнопки и сообщение с проверкой данных
     await query.edit_message_text("Хорошо, давайте начнем сначала.")
-    # Переиспользование функции start
+    # Вызываем /start, чтобы начать новый диалог с чистого листа
     return await start(query.message, context)
-
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Отменяет и завершает диалог."""
@@ -286,6 +301,9 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     )
     context.user_data.clear()
     return ConversationHandler.END
+
+
+# --- ОСНОВНАЯ ФУНКЦИЯ ЗАПУСКА БОТА ---
 
 def main() -> None:
     """Основная функция для запуска бота."""
@@ -320,7 +338,7 @@ def main() -> None:
 
     application.add_handler(conv_handler)
     
-    print("Бот запускается...")
+    logger.info("Бот запускается...")
     application.run_polling()
 
 if __name__ == "__main__":
