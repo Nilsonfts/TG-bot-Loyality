@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import json
+from datetime import datetime
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
@@ -59,8 +60,8 @@ def get_gspread_client():
         logger.error(f"Ошибка аутентификации в Google Sheets: {e}")
         return None
 
-def write_to_sheet(data: dict):
-    """Записывает данные в Google Таблицу, используя ключ (ID) из переменных окружения."""
+def write_to_sheet(data: dict, submission_time: str, tg_handle: str):
+    """Записывает данные в Google Таблицу, включая дату и пользователя Telegram."""
     client = get_gspread_client()
     if not client:
         logger.error("Не удалось получить gspread client.")
@@ -73,7 +74,10 @@ def write_to_sheet(data: dict):
 
     try:
         sheet = client.open_by_key(sheet_key).sheet1
+        # Добавляем дату и пользователя ТГ в начало строки
         row_to_insert = [
+            submission_time,
+            tg_handle,
             data.get('email', ''),
             data.get('fio_initiator', ''),
             data.get('job_title', ''),
@@ -272,13 +276,21 @@ async def get_comment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     return CONFIRMATION
 
 async def submit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Записывает данные в таблицу и завершает диалог."""
+    """Собирает метаданные, записывает все в таблицу и завершает диалог."""
     query = update.callback_query
     await query.answer()
 
     await query.edit_message_text(text="Сохраняю данные...")
 
-    success = write_to_sheet(context.user_data)
+    # 1. Получаем информацию о пользователе Telegram
+    user = query.from_user
+    tg_handle = f"@{user.username}" if user.username else f"ID: {user.id}"
+
+    # 2. Получаем текущую дату и время
+    submission_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+    # 3. Передаем все данные для записи
+    success = write_to_sheet(context.user_data, submission_time, tg_handle)
 
     if success:
         await query.edit_message_text(text="✅ Готово! Данные успешно записаны в таблицу.")
