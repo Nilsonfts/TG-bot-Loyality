@@ -21,6 +21,11 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 # --- НАСТРОЙКИ И ПЕРЕМЕННЫЕ ---
+# Убедитесь, что эти переменные установлены на вашем хостинге (Railway)
+# 1. TELEGRAM_BOT_TOKEN: Секретный токен вашего бота от BotFather.
+# 2. GOOGLE_CREDS_JSON: Полное содержимое вашего JSON-файла с учетными данными.
+# 3. GOOGLE_SHEET_KEY: ID (ключ) вашей Google Таблицы из ее URL-адреса.
+
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 # --- Настройка логирования ---
@@ -39,6 +44,7 @@ logger = logging.getLogger(__name__)
 
 # --- ФУНКЦИИ ДЛЯ РАБОТЫ С GOOGLE SHEETS ---
 def get_gspread_client():
+    """Настраивает и возвращает клиент для работы с Google Sheets."""
     try:
         creds_json_str = os.getenv("GOOGLE_CREDS_JSON")
         if creds_json_str:
@@ -75,6 +81,7 @@ def find_last_entry_in_sheet(user_id: str):
     return None
 
 def write_to_sheet(data: dict, submission_time: str, tg_user_id: str):
+    """Записывает данные в Google Таблицу."""
     client = get_gspread_client()
     if not client:
         return False
@@ -94,28 +101,50 @@ def write_to_sheet(data: dict, submission_time: str, tg_user_id: str):
     return False
 
 
-# --- НОВАЯ ЛОГИКА ДИАЛОГА ---
+# --- ЛОГИКА ДИАЛОГА ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Начинает диалог. Ищет данные инициатора в Google Таблице."""
-    context.user_data.clear()
+    """
+    Начинает диалог. Сначала проверяет кэш, и только потом Google Таблицу.
+    """
     user_id = str(update.effective_user.id)
     chat = update.effective_chat
+    
+    # Сначала проверяем "быструю память" (кэш в context.user_data)
+    if context.user_data.get('initiator_fio'):
+        logger.info(f"Найдены кэшированные данные для пользователя {user_id}")
+        initiator_data = {
+            "fio": context.user_data['initiator_fio'],
+            "email": context.user_data['initiator_email'],
+            "job_title": context.user_data['initiator_job_title']
+        }
+    else:
+        # Если в кэше пусто, один раз обращаемся к медленной Google Таблице
+        logger.info(f"Кэш пуст. Ищем данные для пользователя {user_id} в Google Таблице...")
+        initiator_data = find_last_entry_in_sheet(user_id)
+        # Если нашли, сохраняем в кэш для будущих запусков
+        if initiator_data:
+            logger.info("Данные найдены в таблице и сохранены в кэш.")
+            context.user_data['initiator_fio'] = initiator_data['fio']
+            context.user_data['initiator_email'] = initiator_data['email']
+            context.user_data['initiator_job_title'] = initiator_data['job_title']
 
-    # Ищем последние данные пользователя в таблице
-    initiator_data = find_last_entry_in_sheet(user_id)
+    # Очищаем только данные прошлой *заявки*, оставляя данные *инициатора*
+    form_keys_to_clear = [
+        'owner_last_name', 'owner_first_name', 'reason', 'card_type', 'card_number',
+        'category', 'amount', 'frequency', 'comment', 'email', 'fio_initiator', 'job_title',
+        'found_initiator_data'
+    ]
+    for key in form_keys_to_clear:
+        if key in context.user_data:
+            del context.user_data[key]
 
     if initiator_data:
-        context.user_data['found_initiator_data'] = initiator_data
-        fio = initiator_data['fio']
-        email = initiator_data['email']
-        job = initiator_data['job_title']
-
         text = (
-            f"Здравствуйте! Найдена ваша предыдущая запись в таблице:\n\n"
-            f"👤 **ФИО:** {fio}\n"
-            f"📧 **Почта:** {email}\n"
-            f"🏢 **Должность:** {job}\n\n"
+            f"Здравствуйте! Найдена ваша предыдущая запись:\n\n"
+            f"👤 <b>ФИО:</b> {initiator_data['fio']}\n"
+            f"📧 <b>Почта:</b> {initiator_data['email']}\n"
+            f"🏢 <b>Должность:</b> {initiator_data['job_title']}\n\n"
             f"Использовать эти данные для новой заявки?"
         )
         keyboard = [
@@ -132,17 +161,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return EMAIL
 
 async def handle_reuse_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обрабатывает выбор пользователя: использовать старые данные или ввести новые."""
     query = update.callback_query
     await query.answer()
 
     if query.data == 'reuse_data':
-        found_data = context.user_data.pop('found_initiator_data', {})
-        context.user_data['email'] = found_data.get('email')
-        context.user_data['fio_initiator'] = found_data.get('fio')
-        context.user_data['job_title'] = found_data.get('job_title')
+        # Копируем данные из кэша в текущую форму
+        context.user_data['email'] = context.user_data['initiator_email']
+        context.user_data['fio_initiator'] = context.user_data['initiator_fio']
+        context.user_data['job_title'] = context.user_data['initiator_job_title']
 
         await query.edit_message_text("Отлично! Данные инициатора заполнены.")
-        await query.message.reply_text("Теперь введите **Фамилию** владельца карты.")
+        await query.message.reply_text("Теперь введите <b>Фамилию</b> владельца карты.", parse_mode=ParseMode.HTML)
         return OWNER_LAST_NAME
     else: # enter_new_data
         await query.edit_message_text("Хорошо, давайте введем данные заново.")
@@ -150,25 +180,29 @@ async def handle_reuse_choice(update: Update, context: ContextTypes.DEFAULT_TYPE
         return EMAIL
 
 async def get_email(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Получает и сохраняет email инициатора."""
     context.user_data['email'] = update.message.text
+    context.user_data['initiator_email'] = update.message.text # Кэшируем
     await update.message.reply_text("Отлично! Теперь введите ваше ФИО (полностью).")
     return FIO_INITIATOR
 
 async def get_fio_initiator(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Получает и сохраняет ФИО инициатора."""
     context.user_data['fio_initiator'] = update.message.text
+    context.user_data['initiator_fio'] = update.message.text # Кэшируем
     await update.message.reply_text("Принято. Введите вашу должность в компании (можно сокращенно).")
     return JOB_TITLE
 
 async def get_job_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Получает и сохраняет должность, переходит к данным владельца."""
     context.user_data['job_title'] = update.message.text
-    await update.message.reply_text("Спасибо. Теперь введите **Фамилию** владельца карты.")
+    context.user_data['initiator_job_title'] = update.message.text # Кэшируем
+    await update.message.reply_text("Спасибо. Теперь введите <b>Фамилию</b> владельца карты.", parse_mode=ParseMode.HTML)
     return OWNER_LAST_NAME
-
-# --- Остальные шаги диалога (без изменений) ---
 
 async def get_owner_last_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data['owner_last_name'] = update.message.text
-    await update.message.reply_text("А теперь **Имя** владельца карты.")
+    await update.message.reply_text("А теперь <b>Имя</b> владельца карты.", parse_mode=ParseMode.HTML)
     return OWNER_FIRST_NAME
 
 async def get_owner_first_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -279,26 +313,33 @@ async def submit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     keyboard = [["Подать новую заявку"]]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
     await context.bot.send_message(chat_id=query.message.chat_id, text="Чтобы подать еще одну заявку, нажмите на кнопку ниже 👇", reply_markup=reply_markup)
-    context.user_data.clear()
+    
+    # Очищаем только данные формы, оставляя данные инициатора в кэше
+    form_keys = ['owner_last_name', 'owner_first_name', 'reason', 'card_type', 'card_number', 
+                 'category', 'amount', 'frequency', 'comment', 'email', 'fio_initiator', 'job_title']
+    for key in form_keys:
+        if key in context.user_data:
+            del context.user_data[key]
+            
     return ConversationHandler.END
 
 async def restart_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """ИСПРАВЛЕНО: Корректно перезапускает диалог, вызывая start."""
+    """Корректно перезапускает диалог, вызывая start."""
     query = update.callback_query
     await query.answer()
     await query.edit_message_text("Начинаем заново...")
-    # Передаем оригинальный update в start, чтобы он мог извлечь chat_id
     return await start(update, context)
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("Действие отменено.")
-    context.user_data.clear()
+    context.user_data.clear() # Полная очистка при отмене
     return ConversationHandler.END
 
 
 # --- ОСНОВНАЯ ФУНКЦИЯ ЗАПУСКА БОТА ---
 
 def main() -> None:
+    """Собирает и запускает бота."""
     if not TELEGRAM_BOT_TOKEN:
         logger.error("Не найден токен TELEGRAM_BOT_TOKEN.")
         return
