@@ -40,13 +40,31 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 # --- NAVIGATION HANDLERS ---
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Entry point. Checks registration and shows the correct main menu."""
-    is_registered = g_sheets.is_user_registered(str(update.effective_user.id))
+    """
+    Entry point. Checks registration and shows the correct main menu.
+    This function is now robust and can handle being called from a message or a callback query.
+    """
+    # <<< ИЗМЕНЕНИЕ ЗДЕСЬ >>>
+    # Эта проверка теперь работает как для сообщений, так и для кнопок
+    user = update.effective_user
+    if not user:
+        logger.error("Could not determine user in start_command.")
+        return # Cannot proceed without a user
+
+    is_registered = g_sheets.is_user_registered(str(user.id))
     keyboard = keyboards.get_main_menu_keyboard(is_registered)
+    
+    # Determine how to send the message
+    message_sender = update.message or (update.callback_query and update.callback_query.message)
+    if not message_sender:
+        logger.error("Could not find a message object to reply to in start_command.")
+        return
+
     if is_registered:
-        await update.message.reply_text("Вы в главном меню:", reply_markup=keyboard)
+        await message_sender.reply_text("Вы в главном меню:", reply_markup=keyboard)
     else:
-        await update.message.reply_text("Здравствуйте! Для начала работы, пройдите регистрацию.", reply_markup=keyboard)
+        await message_sender.reply_text("Здравствуйте! Для начала работы, пройдите регистрацию.", reply_markup=keyboard)
+
 
 async def main_menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Alias for /start to show the main menu."""
@@ -110,7 +128,6 @@ async def finish_registration(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
 
     if success:
-        # NEW: Cache the user data on successful registration
         g_sheets.cache_user_data(user_id, context.user_data)
         
         await update.message.reply_text("🎉 <b>Регистрация успешно завершена!</b>", parse_mode=ParseMode.HTML, reply_markup=ReplyKeyboardRemove())
@@ -132,7 +149,6 @@ async def start_form_conversation(update: Update, context: ContextTypes.DEFAULT_
     context.user_data.clear()
     user_id = str(update.effective_user.id)
     
-    # NEW: Use the cache-aware function to get data
     initiator_data = g_sheets.get_initiator_data(user_id)
     
     if not initiator_data:
@@ -146,9 +162,34 @@ async def start_form_conversation(update: Update, context: ContextTypes.DEFAULT_
     )
     return OWNER_LAST_NAME
 
-# The rest of the file remains the same...
+async def submit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Final submission handler for an application."""
+    query = update.callback_query
+    await query.answer(text="Отправляю заявку...", show_alert=False)
+    success = g_sheets.write_to_sheet(context.user_data, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), str(query.from_user.id))
+    status_text = "\n\n<b>Статус:</b> ✅ Заявка успешно отправлена." if success else "\n\n<b>Статус:</b> ❌ Ошибка! Не удалось сохранить заявку."
+    await query.edit_message_text(text=query.message.text_html + status_text, parse_mode=ParseMode.HTML, reply_markup=None)
+    context.user_data.clear()
+    
+    # <<< ИЗМЕНЕНИЕ ЗДЕСЬ >>>
+    # Передаём полный объект `update` в `main_menu_command`, чтобы он мог правильно работать
+    await main_menu_command(update, context)
+    
+    return ConversationHandler.END
 
-# --- SETTINGS & FEATURES CALLBACK HANDLERS ---
+async def restart_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Restarts the application form from the beginning."""
+    query = update.callback_query
+    await query.answer()
+    await query.message.delete()
+    
+    # <<< ИЗМЕНЕНИЕ ЗДЕСЬ >>>
+    # Передаём полный объект `update`, а не только `query`
+    return await start_form_conversation(update, context)
+
+# --- The rest of the handlers are unchanged ---
+# (Pasting them for completeness)
+
 async def back_to_settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
@@ -212,9 +253,7 @@ async def export_csv_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     await context.bot.send_document(chat_id=query.message.chat_id, document=file_to_send)
     await query.message.delete()
 
-# --- PAGINATION & SEARCH HANDLERS ---
 async def display_paginated_list(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int, data_key: str, list_title: str):
-    """Generic function to display a paginated list of items."""
     message_to_edit = update.callback_query.message
     all_items = context.user_data.get(data_key, [])
     
@@ -374,7 +413,6 @@ async def get_frequency(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     return ISSUE_LOCATION
 
 def format_summary(data: dict) -> str:
-    """Formats the final summary of the application."""
     owner = f"{data.get('owner_first_name', '')} {data.get('owner_last_name', '')}".strip()
     card_type = data.get('card_type')
     amount_label = 'Скидка' if card_type == 'Скидка' else 'Сумма'
@@ -398,21 +436,3 @@ async def get_issue_location(update: Update, context: ContextTypes.DEFAULT_TYPE)
     keyboard = [[InlineKeyboardButton("✅ Да, все верно", callback_data="submit"), InlineKeyboardButton("❌ Нет, заполнить заново", callback_data="restart")]]
     await update.message.reply_text(summary, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
     return CONFIRMATION
-
-async def submit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Final submission handler for an application."""
-    query = update.callback_query
-    await query.answer(text="Отправляю заявку...", show_alert=False)
-    success = g_sheets.write_to_sheet(context.user_data, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), str(query.from_user.id))
-    status_text = "\n\n<b>Статус:</b> ✅ Заявка успешно отправлена." if success else "\n\n<b>Статус:</b> ❌ Ошибка! Не удалось сохранить заявку."
-    await query.edit_message_text(text=query.message.text_html + status_text, parse_mode=ParseMode.HTML, reply_markup=None)
-    context.user_data.clear()
-    await main_menu_command(query, context)
-    return ConversationHandler.END
-
-async def restart_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Restarts the application form from the beginning."""
-    query = update.callback_query
-    await query.answer()
-    await query.message.delete()
-    return await start_form_conversation(query, context)
