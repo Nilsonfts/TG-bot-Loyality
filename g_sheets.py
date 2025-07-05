@@ -16,6 +16,9 @@ GOOGLE_SHEET_KEY = os.getenv("GOOGLE_SHEET_KEY")
 
 logger = logging.getLogger(__name__)
 
+# --- Константа для имени листа ---
+SHEET_NAME = "РЕГИСТРАЦИЯ КАРТ ЕВГЕНИЧ"
+
 def get_gspread_client():
     """Authenticates and returns a gspread client."""
     try:
@@ -31,7 +34,7 @@ def get_gspread_client():
         logger.error(f"Error authenticating with Google Sheets: {e}")
         return None
 
-def get_sheet_data(sheet_name="sheet1"):
+def get_sheet_data(sheet_name=SHEET_NAME):
     """Fetches all records from the specified worksheet."""
     client = get_gspread_client()
     if not client or not GOOGLE_SHEET_KEY:
@@ -39,8 +42,11 @@ def get_sheet_data(sheet_name="sheet1"):
     try:
         sheet = client.open_by_key(GOOGLE_SHEET_KEY).worksheet(sheet_name)
         return sheet.get_all_records()
+    except gspread.exceptions.WorksheetNotFound:
+        logger.error(f"Worksheet '{sheet_name}' not found. Please check the sheet name in your Google Sheets file.")
+        return []
     except Exception as e:
-        logger.error(f"Error fetching data from Google Sheet: {e}")
+        logger.error(f"An unexpected error occurred while fetching data from Google Sheet: {e}")
         return []
 
 def is_user_registered(user_id: str) -> bool:
@@ -81,7 +87,7 @@ def write_to_sheet(data: dict, submission_time: str, tg_user_id: str) -> bool:
     if not client or not GOOGLE_SHEET_KEY:
         return False
     try:
-        sheet = client.open_by_key(GOOGLE_SHEET_KEY).sheet1
+        sheet = client.open_by_key(GOOGLE_SHEET_KEY).worksheet(SHEET_NAME)
         # The status depends on whether it's a registration or a full application
         status = 'Заявка' if data.get('owner_last_name') else 'Регистрация'
         final_row = [
