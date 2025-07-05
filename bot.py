@@ -22,7 +22,7 @@ from google.oauth2.service_account import Credentials
 
 # --- НАСТРОЙКИ И ПЕРЕМЕННЫЕ ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CARDS_PER_PAGE = 5 # Количество записей на одной странице
+CARDS_PER_PAGE = 5
 
 # --- Настройка логирования ---
 logging.basicConfig(
@@ -32,11 +32,9 @@ logger = logging.getLogger(__name__)
 
 # --- Состояния для диалога ---
 (
-    # Основная анкета
     REUSE_DATA, EMAIL, FIO_INITIATOR, JOB_TITLE, OWNER_LAST_NAME, OWNER_FIRST_NAME,
     REASON, CARD_TYPE, CARD_NUMBER, CATEGORY, AMOUNT,
     FREQUENCY, COMMENT, CONFIRMATION,
-    # Поиск
     AWAIT_SEARCH_QUERY
 ) = range(15)
 
@@ -80,13 +78,14 @@ def write_to_sheet(data: dict, submission_time: str, tg_user_id: str):
     try:
         sheet = client.open_by_key(os.getenv("GOOGLE_SHEET_KEY")).sheet1
         # Формируем строку ровно из 19 элементов, чтобы соответствовать столбцам A-S
-        # 14 элементов с данными + 5 пустых строк для столбцов N, O, P, R, T
+        # 14 элементов с данными + 5 пустых строк.
+        # Если вы добавите еще столбцы, увеличьте количество пустых строк ''
         row_to_insert = [
             submission_time, tg_user_id, data.get('email', ''), data.get('fio_initiator', ''),
             data.get('job_title', ''), data.get('owner_last_name', ''), data.get('owner_first_name', ''),
             data.get('reason', ''), data.get('card_type', ''), data.get('card_number', ''),
             data.get('category', ''), data.get('amount', ''), data.get('frequency', ''),
-            data.get('comment', ''), '', '', '', '', '' # Пустые ячейки для столбцов N, O, P, R. Статусы Q и S заполняются вручную.
+            data.get('comment', ''), '', '', '', '', ''
         ]
         sheet.append_row(row_to_insert, value_input_option='USER_ENTERED')
         return True
@@ -96,10 +95,10 @@ def write_to_sheet(data: dict, submission_time: str, tg_user_id: str):
 
 # --- ГЛАВНОЕ МЕНЮ И СИСТЕМА НАВИГАЦИИ ---
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Отправляет главное меню с основными функциями."""
+    """Отправляет главное меню с основными функциями (БЕЗ ЭМОДЗИ)."""
     keyboard = [
-        ["✍️ Подать заявку", "🗂️ Мои Карты"],
-        ["🔍 Поиск", "❓ Помощь"]
+        ["Подать заявку", "Мои Карты"],
+        ["Поиск", "Помощь"]
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     await update.message.reply_text(
@@ -114,8 +113,7 @@ async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "▫️ <b>Подать заявку</b> - запуск пошаговой анкеты для регистрации новой карты лояльности.\n\n"
         "▫️ <b>Мои Карты</b> - просмотр всех поданных вами заявок со статусами.\n\n"
         "▫️ <b>Поиск</b> - поиск по вашим заявкам (по имени, фамилии или номеру телефона).\n\n"
-        "Бот автоматически запоминает данные инициатора (вас) для ускорения процесса в будущем. "
-        "По всем техническим вопросам обращайтесь к администратору."
+        "Бот автоматически запоминает данные инициатора (вас) для ускорения процесса в будущем."
     )
     await update.message.reply_text(help_text, parse_mode=ParseMode.HTML)
 
@@ -169,7 +167,7 @@ async def noop_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 # --- ФУНКЦИИ КОМАНД МЕНЮ ---
 async def my_cards_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = str(update.effective_user.id)
-    loading_message = await update.message.reply_text("🔍 Загружаю ваши заявки из таблицы...")
+    loading_message = await update.message.reply_text("🔍 Загружаю ваши заявки...")
     all_cards = get_all_user_cards_from_sheet(user_id)
     if not all_cards:
         await loading_message.edit_text("🤷 Вы еще не подали ни одной заявки.")
@@ -205,16 +203,17 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 # --- ДИАЛОГ ПОДАЧИ ЗАЯВКИ ---
 async def start_form_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    # ... (код этой функции и всех шагов анкеты остается таким же, как в прошлый раз)
+    # Я его включу в финальный блок для полноты
     user_id = str(update.effective_user.id)
     chat = update.effective_chat
     
-    if context.user_data.get('initiator_fio'):
-        initiator_data = {
-            "fio": context.user_data.get('initiator_fio'), "email": context.user_data.get('initiator_email'),
-            "job_title": context.user_data.get('initiator_job_title')
-        }
-    else:
-        initiator_data = None
+    # Кэширование данных инициатора больше не нужно, т.к. поиск по таблице быстрый
+    # Но для удобства можно оставить, чтобы не дергать таблицу каждый раз
+    initiator_data = context.user_data.get('initiator_fio') and {
+        "fio": context.user_data.get('initiator_fio'), "email": context.user_data.get('initiator_email'),
+        "job_title": context.user_data.get('initiator_job_title')
+    }
     
     form_keys = ['owner_last_name', 'owner_first_name', 'reason', 'card_type', 'card_number', 'category', 'amount', 'frequency', 'comment', 'email', 'fio_initiator', 'job_title']
     for key in form_keys:
@@ -231,7 +230,6 @@ async def start_form_conversation(update: Update, context: ContextTypes.DEFAULT_
         await chat.send_message("Начинаем процесс регистрации.\n\nВведите вашу рабочую почту.")
         return EMAIL
 
-# ... (все функции get_... и format_summary остаются здесь)
 async def handle_reuse_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
@@ -329,16 +327,20 @@ def format_summary(data: dict) -> str:
     amount_label = "Скидка" if card_type == 'Скидка' else "Сумма"
     amount_value = f"{data.get('amount', '0')}{'%' if card_type == 'Скидка' else ' ₽'}"
     return (
-        "<b>Проверьте заявку:</b>\n"
-        "<b>Инициатор:</b> {fio}, {job}, {email}\n"
-        "<b>Владелец:</b> {owner}\n"
-        "<b>Карта:</b> {num}, {type}\n"
-        "<b>Начисление:</b> {amount} ({label})\n"
-        "<b>Комментарий:</b> {comm}".format(
-            fio=data.get('fio_initiator', '-'), job=data.get('job_title', '-'), email=data.get('email', '-'),
-            owner=owner_full_name, num=data.get('card_number', '-'), type=card_type,
-            amount=amount_value, label=data.get('frequency', '-'), comm=data.get('comment', '-')
-        )
+        "<b>Пожалуйста, проверьте итоговую заявку:</b>\n\n"
+        "--- <b>Инициатор</b> ---\n"
+        f"👤 <b>ФИО:</b> {data.get('fio_initiator', '-')}\n"
+        f"📧 <b>Почта:</b> {data.get('email', '-')}\n"
+        f"🏢 <b>Должность:</b> {data.get('job_title', '-')}\n\n"
+        "--- <b>Карта лояльности</b> ---\n"
+        f"💳 <b>Владелец:</b> {owner_full_name}\n"
+        f"📞 <b>Номер:</b> {data.get('card_number', '-')}\n"
+        f"✨ <b>Тип:</b> {card_type}\n"
+        f"💰 <b>{amount_label}:</b> {amount_value}\n"
+        f"📈 <b>Статья:</b> {data.get('category', '-')}\n"
+        f"🔄 <b>Периодичность:</b> {data.get('frequency', '-')}\n"
+        f"💬 <b>Комментарий:</b> {data.get('comment', '-')}\n\n"
+        "<i>Все верно? Если да, нажимайте 'Да'.</i>"
     )
 
 async def get_comment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -358,9 +360,13 @@ async def submit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await query.edit_message_text("✅ Готово! Заявка записана.")
     else:
         await query.edit_message_text("❌ Ошибка при записи в таблицу.")
-    # Возвращаемся в главное меню, отправляя ту же клавиатуру
+    
     await show_main_menu(query.message, context)
-    context.user_data.clear()
+    # Очищаем только данные формы, оставляя кэш инициатора
+    form_keys = ['owner_last_name', 'owner_first_name', 'reason', 'card_type', 'card_number', 'category', 'amount', 'frequency', 'comment', 'email', 'fio_initiator', 'job_title']
+    for key in form_keys:
+        if key in context.user_data: del context.user_data[key]
+        
     return ConversationHandler.END
 
 async def restart_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -371,6 +377,11 @@ async def restart_conversation(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("Действие отменено.")
+    await show_main_menu(update.message, context)
+    return ConversationHandler.END
+
+async def cancel_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.message.reply_text("Поиск отменен.")
     await show_main_menu(update.message, context)
     return ConversationHandler.END
 
@@ -385,7 +396,7 @@ def main() -> None:
 
     # Диалог для подачи заявки
     form_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex("^✍️ Подать заявку$"), start_form_conversation)],
+        entry_points=[MessageHandler(filters.Regex("^Подать заявку$"), start_form_conversation)],
         states={
             REUSE_DATA: [CallbackQueryHandler(handle_reuse_choice)],
             EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_email)],
@@ -410,16 +421,16 @@ def main() -> None:
 
     # Диалог для поиска
     search_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex("^🔍 Поиск$"), search_command)],
+        entry_points=[MessageHandler(filters.Regex("^Поиск$"), search_command)],
         states={ AWAIT_SEARCH_QUERY: [MessageHandler(filters.TEXT & ~filters.COMMAND, perform_search)] },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        fallbacks=[CommandHandler("cancel", cancel_search)],
     )
 
     application.add_handler(CommandHandler("start", show_main_menu))
     application.add_handler(form_conv)
     application.add_handler(search_conv)
-    application.add_handler(MessageHandler(filters.Regex("^🗂️ Мои Карты$"), my_cards_command))
-    application.add_handler(MessageHandler(filters.Regex("^❓ Помощь$"), show_help))
+    application.add_handler(MessageHandler(filters.Regex("^Мои Карты$"), my_cards_command))
+    application.add_handler(MessageHandler(filters.Regex("^Помощь$"), show_help))
     application.add_handler(CallbackQueryHandler(handle_pagination, pattern=r"^paginate_"))
     application.add_handler(CallbackQueryHandler(noop_callback, pattern=r"^noop$"))
     
