@@ -349,33 +349,10 @@ async def restart_conversation(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.edit_message_text("Начинаем заявку заново...")
     return await start_form_conversation(update, context)
 
-# --- Функции отмены и прерывания диалогов ---
-async def cancel_and_show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Общая функция отмены для любого диалога."""
-    await update.message.reply_text("Текущее действие отменено.")
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.message.reply_text("Действие отменено.")
     await show_main_menu(update, context)
-    context.user_data.clear()
     return ConversationHandler.END
-
-async def fallback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """
-    Обрабатывает нажатие кнопок меню во время диалога.
-    Отменяет текущий диалог и выполняет новую команду.
-    """
-    await update.message.reply_text("Текущая операция отменена.", quote=True)
-    command = update.message.text.lstrip('✍️🗂️🔍❓ ').strip()
-
-    if command == "Подать заявку":
-        await start_form_conversation(update, context)
-    elif command == "Мои Карты":
-        await my_cards_command(update, context)
-    elif command == "Поиск":
-        await search_command(update, context)
-    elif command == "Помощь":
-        await show_help(update, context)
-        
-    return ConversationHandler.END
-
 
 # --- ОСНОВНАЯ ФУНКЦИЯ ЗАПУСКА БОТА ---
 def main() -> None:
@@ -391,37 +368,56 @@ def main() -> None:
     search_filter = filters.Regex("^(🔍 )?Поиск$")
     help_filter = filters.Regex("^(❓ )?Помощь$")
     
-    # Объединяем все фильтры кнопок меню для фолбэков
-    menu_filters = form_filter | cards_filter | search_filter | help_filter
+    # ИСПРАВЛЕНИЕ: Фильтр для стейтов, который ИГНОРИРУЕТ кнопки меню
+    state_text_filter = filters.TEXT & ~filters.COMMAND & ~form_filter & ~cards_filter & ~search_filter & ~help_filter
 
-    # Диалог для подачи заявки
+    # Фолбэки для прерывания диалогов
+    fallbacks = [
+        MessageHandler(form_filter, start_form_conversation),
+        MessageHandler(cards_filter, my_cards_command),
+        MessageHandler(search_filter, search_command),
+        MessageHandler(help_filter, show_help),
+        CommandHandler("start", show_main_menu),
+    ]
+
     form_conv = ConversationHandler(
         entry_points=[MessageHandler(form_filter, start_form_conversation)],
         states={
-            REUSE_DATA: [CallbackQueryHandler(handle_reuse_choice)], EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_email)],
-            FIO_INITIATOR: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_fio_initiator)], JOB_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_job_title)],
-            OWNER_LAST_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_owner_last_name)], OWNER_FIRST_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_owner_first_name)],
-            REASON: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_reason)], CARD_TYPE: [CallbackQueryHandler(get_card_type)],
-            CARD_NUMBER: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_card_number)], CATEGORY: [CallbackQueryHandler(get_category)],
-            AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_amount)], FREQUENCY: [CallbackQueryHandler(get_frequency)],
-            COMMENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_comment)],
+            REUSE_DATA: [CallbackQueryHandler(handle_reuse_choice)], 
+            EMAIL: [MessageHandler(state_text_filter, get_email)],
+            FIO_INITIATOR: [MessageHandler(state_text_filter, get_fio_initiator)], 
+            JOB_TITLE: [MessageHandler(state_text_filter, get_job_title)],
+            OWNER_LAST_NAME: [MessageHandler(state_text_filter, get_owner_last_name)], 
+            OWNER_FIRST_NAME: [MessageHandler(state_text_filter, get_owner_first_name)],
+            REASON: [MessageHandler(state_text_filter, get_reason)], 
+            CARD_TYPE: [CallbackQueryHandler(get_card_type)],
+            CARD_NUMBER: [MessageHandler(state_text_filter, get_card_number)], 
+            CATEGORY: [CallbackQueryHandler(get_category)],
+            AMOUNT: [MessageHandler(state_text_filter, get_amount)], 
+            FREQUENCY: [CallbackQueryHandler(get_frequency)],
+            COMMENT: [MessageHandler(state_text_filter, get_comment)],
             CONFIRMATION: [CallbackQueryHandler(submit, pattern="^submit$"), CallbackQueryHandler(restart_conversation, pattern="^restart$")],
         },
-        fallbacks=[MessageHandler(menu_filters, fallback_handler), CommandHandler("start", cancel_and_show_menu)],
+        fallbacks=fallbacks,
+        # Мы прерываем диалог и начинаем новый, map_to_parent не нужен
     )
 
-    # Диалог для поиска
     search_conv = ConversationHandler(
         entry_points=[MessageHandler(search_filter, search_command)],
-        states={ AWAIT_SEARCH_QUERY: [MessageHandler(filters.TEXT & ~filters.COMMAND, perform_search)] },
-        fallbacks=[MessageHandler(menu_filters, fallback_handler), CommandHandler("start", cancel_and_show_menu)],
+        states={ AWAIT_SEARCH_QUERY: [MessageHandler(state_text_filter, perform_search)] },
+        fallbacks=fallbacks,
     )
 
-    application.add_handler(CommandHandler("start", show_main_menu))
+    # Регистрируем сначала ConversationHandlers
     application.add_handler(form_conv)
     application.add_handler(search_conv)
+    
+    # Затем основные команды и кнопки, которые работают вне диалогов
+    application.add_handler(CommandHandler("start", show_main_menu))
     application.add_handler(MessageHandler(cards_filter, my_cards_command))
     application.add_handler(MessageHandler(help_filter, show_help))
+    
+    # И в конце обработчики колбэков, не входящих в диалоги
     application.add_handler(CallbackQueryHandler(handle_pagination, pattern=r"^paginate_"))
     application.add_handler(CallbackQueryHandler(noop_callback, pattern=r"^noop$"))
     
