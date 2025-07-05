@@ -92,7 +92,6 @@ def write_to_sheet(data: dict, submission_time: str, tg_user_id: str):
 
 # --- ГЛАВНОЕ МЕНЮ И СИСТЕМА НАВИГАЦИИ ---
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Отправляет главное меню с эмодзи и новым дизайном кнопок."""
     keyboard = [
         ["✍️ Подать заявку"],
         ["🗂️ Мои Карты", "🔍 Поиск", "❓ Помощь"]
@@ -105,7 +104,6 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     )
 
 async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Отправляет справочное сообщение."""
     help_text = (
         "<b>Справка по боту</b>\n\n"
         "▫️ <b>Подать заявку</b> - запуск пошаговой анкеты.\n"
@@ -351,10 +349,33 @@ async def restart_conversation(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.edit_message_text("Начинаем заявку заново...")
     return await start_form_conversation(update, context)
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.message.reply_text("Действие отменено.")
+# --- Функции отмены и прерывания диалогов ---
+async def cancel_and_show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Общая функция отмены для любого диалога."""
+    await update.message.reply_text("Текущее действие отменено.")
     await show_main_menu(update, context)
+    context.user_data.clear()
     return ConversationHandler.END
+
+async def fallback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Обрабатывает нажатие кнопок меню во время диалога.
+    Отменяет текущий диалог и выполняет новую команду.
+    """
+    await update.message.reply_text("Текущая операция отменена.", quote=True)
+    command = update.message.text.lstrip('✍️🗂️🔍❓ ').strip()
+
+    if command == "Подать заявку":
+        await start_form_conversation(update, context)
+    elif command == "Мои Карты":
+        await my_cards_command(update, context)
+    elif command == "Поиск":
+        await search_command(update, context)
+    elif command == "Помощь":
+        await show_help(update, context)
+        
+    return ConversationHandler.END
+
 
 # --- ОСНОВНАЯ ФУНКЦИЯ ЗАПУСКА БОТА ---
 def main() -> None:
@@ -369,16 +390,11 @@ def main() -> None:
     cards_filter = filters.Regex("^(🗂️ )?Мои Карты$")
     search_filter = filters.Regex("^(🔍 )?Поиск$")
     help_filter = filters.Regex("^(❓ )?Помощь$")
+    
+    # Объединяем все фильтры кнопок меню для фолбэков
+    menu_filters = form_filter | cards_filter | search_filter | help_filter
 
-    # Фолбэки для прерывания диалогов
-    fallbacks = [
-        MessageHandler(cards_filter, cancel),
-        MessageHandler(search_filter, cancel),
-        MessageHandler(help_filter, cancel),
-        CommandHandler("cancel", cancel),
-        CommandHandler("start", cancel),
-    ]
-
+    # Диалог для подачи заявки
     form_conv = ConversationHandler(
         entry_points=[MessageHandler(form_filter, start_form_conversation)],
         states={
@@ -391,13 +407,14 @@ def main() -> None:
             COMMENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_comment)],
             CONFIRMATION: [CallbackQueryHandler(submit, pattern="^submit$"), CallbackQueryHandler(restart_conversation, pattern="^restart$")],
         },
-        fallbacks=fallbacks,
+        fallbacks=[MessageHandler(menu_filters, fallback_handler), CommandHandler("start", cancel_and_show_menu)],
     )
 
+    # Диалог для поиска
     search_conv = ConversationHandler(
         entry_points=[MessageHandler(search_filter, search_command)],
         states={ AWAIT_SEARCH_QUERY: [MessageHandler(filters.TEXT & ~filters.COMMAND, perform_search)] },
-        fallbacks=fallbacks,
+        fallbacks=[MessageHandler(menu_filters, fallback_handler), CommandHandler("start", cancel_and_show_menu)],
     )
 
     application.add_handler(CommandHandler("start", show_main_menu))
