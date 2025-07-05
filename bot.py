@@ -58,7 +58,6 @@ def get_all_user_cards_from_sheet(user_id: str) -> list:
     if not client: return []
     try:
         sheet = client.open_by_key(os.getenv("GOOGLE_SHEET_KEY")).sheet1
-        # Поиск может быть медленным. Для продакшена лучше использовать более быстрые методы.
         cell_list = sheet.findall(user_id, in_column=2)
         cards = []
         for cell in cell_list:
@@ -222,7 +221,6 @@ async def get_job_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     await update.message.reply_text("Спасибо. Теперь введите <b>Фамилию</b> владельца карты.", parse_mode=ParseMode.HTML)
     return OWNER_LAST_NAME
 
-# ... (остальные функции get_... остаются без изменений)
 async def get_owner_last_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data['owner_last_name'] = update.message.text
     await update.message.reply_text("<b>Имя</b> владельца карты.", parse_mode=ParseMode.HTML)
@@ -310,7 +308,6 @@ async def submit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
     user_id = str(query.from_user.id)
-    # Добавляем небольшую паузу для Google Sheets
     await asyncio.sleep(2)
     success = write_to_sheet(context.user_data, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), user_id)
     original_text = query.message.text_html
@@ -328,9 +325,22 @@ async def restart_conversation(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Полностью отменяет любой диалог и возвращает в главное меню."""
-    await update.message.reply_text("Действие отменено.")
-    await show_main_menu(update, context)
-    context.user_data.clear() # Очищаем все данные на всякий случай
+    command_text = update.message.text
+    # Проверяем, был ли диалог активен
+    if context.user_data:
+        await update.message.reply_text("Текущее действие отменено.")
+        context.user_data.clear()
+    
+    # После отмены выполняем команду, которую пользователь хотел
+    if "Подать заявку" in command_text:
+        return await start_form_conversation(update, context)
+    elif "Мои Карты" in command_text:
+        await my_cards_command(update, context)
+    elif "Поиск" in command_text:
+        return await search_command(update, context)
+    elif "Помощь" in command_text:
+        await show_help(update, context)
+
     return ConversationHandler.END
 
 
@@ -342,23 +352,17 @@ def main() -> None:
 
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
+    # Фильтры для кнопок меню
     form_filter = filters.Regex("^(✍️ )?Подать заявку$")
     cards_filter = filters.Regex("^(🗂️ )?Мои Карты$")
     search_filter = filters.Regex("^(🔍 )?Поиск$")
     help_filter = filters.Regex("^(❓ )?Помощь$")
     
-    # ИСПРАВЛЕННЫЙ ФИЛЬТР: Принимает любой текст, который не является кнопкой меню
+    # Фильтр для обычного текста в состояниях, который не является кнопкой меню
     state_text_filter = filters.TEXT & ~filters.COMMAND & ~form_filter & ~cards_filter & ~search_filter & ~help_filter
-
-    # ИСПРАВЛЕННЫЕ ФОЛБЭКИ: Отдельные для каждой анкеты, чтобы не прерывать саму себя
-    form_fallbacks = [
-        MessageHandler(cards_filter | search_filter | help_filter, cancel),
-        CommandHandler("start", cancel)
-    ]
-    search_fallbacks = [
-        MessageHandler(form_filter | cards_filter | help_filter, cancel),
-        CommandHandler("start", cancel)
-    ]
+    
+    # Общий обработчик отмены для всех диалогов
+    cancel_handler = CommandHandler("cancel", cancel)
 
     form_conv = ConversationHandler(
         entry_points=[MessageHandler(form_filter, start_form_conversation)],
@@ -378,13 +382,13 @@ def main() -> None:
             COMMENT: [MessageHandler(state_text_filter, get_comment)],
             CONFIRMATION: [CallbackQueryHandler(submit, pattern="^submit$"), CallbackQueryHandler(restart_conversation, pattern="^restart$")],
         },
-        fallbacks=form_fallbacks,
+        fallbacks=[MessageHandler(cards_filter | search_filter | help_filter, cancel), cancel_handler],
     )
 
     search_conv = ConversationHandler(
         entry_points=[MessageHandler(search_filter, search_command)],
         states={ AWAIT_SEARCH_QUERY: [MessageHandler(state_text_filter, perform_search)] },
-        fallbacks=search_fallbacks,
+        fallbacks=[MessageHandler(form_filter | cards_filter | help_filter, cancel), cancel_handler],
     )
 
     application.add_handler(CommandHandler("start", show_main_menu))
