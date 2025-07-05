@@ -63,8 +63,9 @@ def get_all_user_cards_from_sheet(user_id: str) -> list:
         data_rows = all_rows[1:]
         user_cards = []
         for row in data_rows:
+            # Сравниваем ID как строки, чтобы избежать проблем с форматом
             if len(row) > 1 and str(row[1]) == user_id:
-                # ИСПРАВЛЕНО: Индексы сдвинуты из-за нового столбца
+                # ИНДЕКСЫ СДВИНУТЫ из-за новых столбцов
                 if len(row) >= 20: 
                     card_info = {
                         "date": row[0], "owner_first_name": row[7], "owner_last_name": row[6],
@@ -81,10 +82,9 @@ def write_to_sheet(data: dict, submission_time: str, tg_user_id: str):
     if not client: return False
     try:
         sheet = client.open_by_key(os.getenv("GOOGLE_SHEET_KEY")).sheet1
-        # Теперь у нас 20 столбцов (A-T)
         row_to_insert = [
             submission_time, tg_user_id,
-            data.get('initiator_username', '–'), # Новый столбец
+            data.get('initiator_username', '–'),
             data.get('initiator_email', ''), data.get('initiator_fio', ''),
             data.get('initiator_job_title', ''), data.get('initiator_phone', ''),
             data.get('owner_last_name', ''), data.get('owner_first_name', ''),
@@ -108,7 +108,7 @@ async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("Выберите действие в главном меню.")
 
 
-# --- ПАГИНАЦИЯ И ПОИСК (без изменений) ---
+# --- ПАГИНАЦИЯ И ПОИСК ---
 async def display_paginated_list(message_to_edit, context: ContextTypes.DEFAULT_TYPE, page: int, data_key: str, list_title: str):
     all_items = context.user_data.get(data_key, [])
     if not all_items: await message_to_edit.edit_text("🤷 Ничего не найдено."); return
@@ -162,6 +162,7 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 # --- ДИАЛОГ ПОДАЧИ ЗАЯВКИ С АВТОРИЗАЦИЕЙ ---
 async def start_form_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Начинает диалог: проверяет, зарегистрирован ли пользователь. Если нет - просит контакт."""
     if context.user_data.get('initiator_registered'):
         await update.message.reply_text("Начинаем подачу новой заявки.\n\nВведите <b>Фамилию</b> владельца карты.", parse_mode=ParseMode.HTML)
         return OWNER_LAST_NAME
@@ -199,12 +200,13 @@ async def get_registration_email(update: Update, context: ContextTypes.DEFAULT_T
     return REGISTER_JOB_TITLE
 
 async def get_registration_job_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """ИСПРАВЛЕНО: Завершает регистрацию и возвращает в главное меню."""
     context.user_data['initiator_job_title'] = update.message.text
     context.user_data['initiator_registered'] = True
+    
     await update.message.reply_text("🎉 **Регистрация успешно завершена!**", parse_mode=ParseMode.HTML)
-    await show_main_menu(update, context)
-    await update.message.reply_text("Теперь можно подавать заявку. Введите <b>Фамилию</b> владельца карты.", parse_mode=ParseMode.HTML)
-    return OWNER_LAST_NAME
+    await show_main_menu(update, context) # Возвращаем в главное меню
+    return ConversationHandler.END
 
 # ... (Остальные шаги анкеты)
 async def get_owner_last_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -316,10 +318,12 @@ def main() -> None:
     form_conv = ConversationHandler(
         entry_points=[MessageHandler(form_filter, start_form_conversation)],
         states={
+            # Регистрация
             REGISTER_CONTACT: [MessageHandler(filters.CONTACT, handle_contact_registration)],
             REGISTER_FIO: [MessageHandler(state_text_filter, get_registration_fio)],
             REGISTER_EMAIL: [MessageHandler(state_text_filter, get_registration_email)],
             REGISTER_JOB_TITLE: [MessageHandler(state_text_filter, get_registration_job_title)],
+            # Анкета
             OWNER_LAST_NAME: [MessageHandler(state_text_filter, get_owner_last_name)], 
             OWNER_FIRST_NAME: [MessageHandler(state_text_filter, get_owner_first_name)],
             REASON: [MessageHandler(state_text_filter, get_reason)], 
