@@ -51,53 +51,30 @@ def get_gspread_client():
             creds = Credentials.from_service_account_info(creds_info, scopes=scopes)
             return gspread.authorize(creds)
     except Exception as e:
-        logger.error(f"ОТЛАДКА: Ошибка аутентификации в Google Sheets: {e}")
+        logger.error(f"Ошибка аутентификации в Google Sheets: {e}")
     return None
 
 def get_all_user_cards_from_sheet(user_id: str) -> list:
-    """
-    ОТЛАДОЧНАЯ ВЕРСИЯ: Логирует каждый шаг сравнения.
-    """
     client = get_gspread_client()
-    if not client: 
-        logger.error("ОТЛАДКА: gspread client не создан.")
-        return []
+    if not client: return []
     try:
         sheet = client.open_by_key(os.getenv("GOOGLE_SHEET_KEY")).sheet1
         all_rows = sheet.get_all_values()
-        data_rows = all_rows[1:] # Пропускаем заголовок
-        
-        logger.info(f"--- НАЧАЛО ПОИСКА ДЛЯ ID: [{user_id}] (тип: {type(user_id)}) ---")
-        logger.info(f"Всего строк в таблице для проверки: {len(data_rows)}")
-
+        data_rows = all_rows[1:]
         user_cards = []
-        for i, row in enumerate(data_rows, 2): # Начинаем нумерацию с 2 для удобства
-            if len(row) > 1:
-                sheet_id = row[1].strip() # ID из таблицы, убираем пробелы
-                
-                # Логируем каждое сравнение
-                logger.info(f"Строка #{i}: Сравниваем ID из таблицы [{sheet_id}] (тип: {type(sheet_id)}) с искомым ID [{user_id}]")
-                
-                if sheet_id == user_id:
-                    logger.info(f"!!! СОВПАДЕНИЕ НАЙДЕНО в строке {i} !!!")
-                    if len(row) >= 20:
-                        card_info = {
-                            "date": row[0], "owner_last_name": row[7], "owner_first_name": row[8],
-                            "card_number": row[11], "status_q": row[17] or "–", "status_s": row[19] or "–"
-                        }
-                        user_cards.append(card_info)
-            else:
-                logger.warning(f"Строка #{i} пустая или слишком короткая.")
-
-        if not user_cards:
-            logger.warning(f"--- ПОИСК ЗАВЕРШЕН. СОВПАДЕНИЙ НЕ НАЙДЕНО для ID: [{user_id}] ---")
-        else:
-            logger.info(f"--- ПОИСК ЗАВЕРШЕН. Найдено {len(user_cards)} карт. ---")
-            
+        for row in data_rows:
+            if len(row) > 1 and str(row[1]) == user_id:
+                if len(row) >= 20: 
+                    card_info = {
+                        "date": row[0], "owner_last_name": row[7], "owner_first_name": row[8],
+                        "card_type": row[10], "card_number": row[11], "amount": row[13],
+                        "status_q": row[17] or "–", "status_s": row[19] or "–"
+                    }
+                    cards.append(card_info)
         return list(reversed(user_cards))
     except Exception as e:
-        logger.error(f"ОТЛАДКА: Исключение в get_all_user_cards_from_sheet: {e}")
-        return []
+        logger.error(f"Ошибка при поиске карт пользователя: {e}")
+    return []
 
 def write_to_sheet(data: dict, submission_time: str, tg_user_id: str):
     client = get_gspread_client()
@@ -105,18 +82,14 @@ def write_to_sheet(data: dict, submission_time: str, tg_user_id: str):
     try:
         sheet = client.open_by_key(os.getenv("GOOGLE_SHEET_KEY")).sheet1
         row_to_insert = [
-            submission_time, tg_user_id,
-            data.get('initiator_username', '–'), data.get('initiator_email', ''), 
-            data.get('initiator_fio', ''), data.get('initiator_job_title', ''), 
-            data.get('initiator_phone', ''), data.get('owner_last_name', ''), 
-            data.get('owner_first_name', ''), data.get('reason', ''), 
-            data.get('card_type', ''), data.get('card_number', ''),
-            data.get('category', ''), data.get('amount', ''), 
-            data.get('frequency', ''), data.get('comment', ''), 
+            submission_time, tg_user_id, data.get('initiator_username', '–'), data.get('initiator_email', ''), 
+            data.get('initiator_fio', ''), data.get('initiator_job_title', ''), data.get('initiator_phone', ''), 
+            data.get('owner_last_name', ''), data.get('owner_first_name', ''), data.get('reason', ''), 
+            data.get('card_type', ''), data.get('card_number', ''), data.get('category', ''), 
+            data.get('amount', ''), data.get('frequency', ''), data.get('comment', ''), 
             '', '', '', ''
         ]
         sheet.append_row(row_to_insert, value_input_option='USER_ENTERED')
-        logger.info(f"Успешно записана строка для пользователя {tg_user_id}")
         return True
     except Exception as e:
         logger.error(f"Не удалось записать данные в таблицу: {e}")
@@ -129,23 +102,43 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await context.bot.send_message(chat_id=update.effective_chat.id, text="Вы в главном меню. Выберите действие:", reply_markup=reply_markup)
 
 async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text("Выберите действие в главном меню.")
+    help_text = ("<b>Справка по боту</b>\n\n"
+                 "▫️ <b>Подать заявку</b> - запуск пошаговой анкеты.\n"
+                 "▫️ <b>Мои Карты</b> - просмотр всех поданных вами заявок.\n"
+                 "▫️ <b>Поиск</b> - поиск по вашим заявкам.\n\n"
+                 "Нажатие на любую кнопку меню во время заполнения анкеты отменит текущее действие.")
+    await update.message.reply_text(help_text, parse_mode=ParseMode.HTML)
 
 
-# --- ПАГИНАЦИЯ И ПОИСК ---
+# --- СИСТЕМА ПАГИНАЦИИ ---
 async def display_paginated_list(message_to_edit, context: ContextTypes.DEFAULT_TYPE, page: int, data_key: str, list_title: str):
     all_items = context.user_data.get(data_key, [])
     if not all_items: await message_to_edit.edit_text("🤷 Ничего не найдено."); return
+    
     start_index = page * CARDS_PER_PAGE
     end_index = start_index + CARDS_PER_PAGE
     items_on_page = all_items[start_index:end_index]
     total_pages = (len(all_items) + CARDS_PER_PAGE - 1) // CARDS_PER_PAGE
+    
     text = f"<b>{list_title} (Стр. {page + 1}/{total_pages}):</b>\n\n"
     for card in items_on_page:
         owner_name = f"{card.get('owner_first_name','')} {card.get('owner_last_name','-')}".strip()
-        text += (f"👤 <b>Владелец:</b> {owner_name}\n📞 Номер: {card['card_number']}\n"
+        
+        # Формируем строку с суммой или скидкой
+        amount_text = ""
+        if card.get('amount'):
+            if card.get('card_type') == 'Скидка':
+                amount_text = f"💰 Скидка: {card['amount']}%\n"
+            else:
+                amount_text = f"💰 Бартер: {card['amount']} ₽\n"
+
+        text += (f"👤 <b>Владелец:</b> {owner_name}\n"
+                 f"📞 Номер: {card['card_number']}\n"
+                 f"{amount_text}"
                  f"<b>Согласование:</b> <code>{card['status_q']}</code> | <b>Активность:</b> <code>{card['status_s']}</code>\n"
-                 f"📅 Дата: {card['date']}\n--------------------\n")
+                 f"📅 Дата: {card['date']}\n"
+                 f"--------------------\n")
+    
     keyboard = []
     row = []
     if page > 0: row.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"paginate_{data_key}_{page - 1}"))
@@ -153,6 +146,7 @@ async def display_paginated_list(message_to_edit, context: ContextTypes.DEFAULT_
     if end_index < len(all_items): row.append(InlineKeyboardButton("Вперед ➡️", callback_data=f"paginate_{data_key}_{page + 1}"))
     keyboard.append(row)
     await message_to_edit.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
+
 async def handle_pagination(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
@@ -162,6 +156,9 @@ async def handle_pagination(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await display_paginated_list(query.message, context, page=page, data_key=data_key, list_title=list_title)
 async def noop_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.callback_query.answer()
+
+
+# --- ФУНКЦИИ КОМАНД МЕНЮ ---
 async def my_cards_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = str(update.effective_user.id)
     loading_message = await update.message.reply_text("🔍 Загружаю ваши заявки...")
@@ -169,9 +166,11 @@ async def my_cards_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if not all_cards: await loading_message.edit_text("🤷 Вы еще не подали ни одной заявки."); return
     context.user_data['mycards'] = all_cards
     await display_paginated_list(loading_message, context, page=0, data_key='mycards', list_title="Ваши поданные заявки")
+
 async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("Введите, что вы хотите найти:")
     return AWAIT_SEARCH_QUERY
+
 async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = str(update.effective_user.id)
     search_query = update.message.text.lower()
@@ -186,6 +185,7 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 # --- ДИАЛОГ ПОДАЧИ ЗАЯВКИ С АВТОРИЗАЦИЕЙ ---
 async def start_form_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    #... (код без изменений)
     if context.user_data.get('initiator_registered'):
         await update.message.reply_text("Начинаем подачу новой заявки.\n\nВведите <b>Фамилию</b> владельца карты.", parse_mode=ParseMode.HTML)
         return OWNER_LAST_NAME
@@ -195,6 +195,7 @@ async def start_form_conversation(update: Update, context: ContextTypes.DEFAULT_
         await update.message.reply_text("Здравствуйте! Для начала работы, пожалуйста, пройдите быструю авторизацию.", reply_markup=reply_markup)
         return REGISTER_CONTACT
 
+# ... (все функции get_... и format_summary остаются такими же, как в последнем коде)
 async def handle_contact_registration(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     contact = update.message.contact
     user = update.effective_user
@@ -205,12 +206,10 @@ async def handle_contact_registration(update: Update, context: ContextTypes.DEFA
     context.user_data['initiator_username'] = f"@{user.username}" if user.username else "–"
     await update.message.reply_text("✅ Контакт получен!\n\n👤 Введите ваше <b>полное ФИО</b> для отчетности.", reply_markup=ReplyKeyboardRemove(), parse_mode=ParseMode.HTML)
     return REGISTER_FIO
-
 async def get_registration_fio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data['initiator_fio'] = update.message.text
     await update.message.reply_text("✅ ФИО принято.\n\n📧 Введите вашу <b>рабочую почту</b>.", parse_mode=ParseMode.HTML)
     return REGISTER_EMAIL
-
 async def get_registration_email(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     email = update.message.text
     if not re.match(r"[^@]+@[^@]+\.[^@]+", email):
@@ -219,15 +218,12 @@ async def get_registration_email(update: Update, context: ContextTypes.DEFAULT_T
     context.user_data['initiator_email'] = email
     await update.message.reply_text("✅ Почта принята.\n\n🏢 Введите вашу <b>должность</b>.", parse_mode=ParseMode.HTML)
     return REGISTER_JOB_TITLE
-
 async def get_registration_job_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data['initiator_job_title'] = update.message.text
     context.user_data['initiator_registered'] = True
     await update.message.reply_text("🎉 <b>Регистрация успешно завершена!</b>", parse_mode=ParseMode.HTML)
     await show_main_menu(update, context)
     return ConversationHandler.END
-
-# ... (Остальные шаги анкеты)
 async def get_owner_last_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data['owner_last_name'] = update.message.text
     await update.message.reply_text("<b>Имя</b> владельца карты.", parse_mode=ParseMode.HTML)
@@ -334,6 +330,7 @@ def main() -> None:
     
     cancel_handler = CommandHandler("cancel", cancel_and_return_to_menu)
 
+    # ИСПРАВЛЕНИЕ: Мы используем block=False, чтобы разрешить другим хендлерам прерывать диалог
     form_conv = ConversationHandler(
         entry_points=[MessageHandler(form_filter, start_form_conversation)],
         states={
@@ -353,18 +350,23 @@ def main() -> None:
             CONFIRMATION: [CallbackQueryHandler(submit, pattern="^submit$"), CallbackQueryHandler(restart_conversation, pattern="^restart$")],
         },
         fallbacks=[cancel_handler],
+        block=False # Ключевое изменение для прерывания
     )
     search_conv = ConversationHandler(
         entry_points=[MessageHandler(search_filter, search_command)],
         states={ AWAIT_SEARCH_QUERY: [MessageHandler(state_text_filter, perform_search)] },
         fallbacks=[cancel_handler],
+        block=False # Ключевое изменение для прерывания
     )
 
-    application.add_handler(CommandHandler("start", show_main_menu))
-    application.add_handler(form_conv)
-    application.add_handler(search_conv)
-    application.add_handler(MessageHandler(cards_filter, my_cards_command))
-    application.add_handler(MessageHandler(help_filter, show_help))
+    # Регистрируем обработчики в разных группах. Сначала диалоги, потом обычные команды
+    application.add_handler(form_conv, group=0)
+    application.add_handler(search_conv, group=0)
+    
+    application.add_handler(CommandHandler("start", show_main_menu), group=1)
+    application.add_handler(MessageHandler(cards_filter, my_cards_command), group=1)
+    application.add_handler(MessageHandler(help_filter, show_help), group=1)
+    
     application.add_handler(CallbackQueryHandler(handle_pagination, pattern=r"^paginate_"))
     application.add_handler(CallbackQueryHandler(noop_callback, pattern=r"^noop$"))
     
