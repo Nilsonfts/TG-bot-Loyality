@@ -90,14 +90,20 @@ def write_to_sheet(data: dict, submission_time: str, tg_user_id: str):
         logger.error(f"Не удалось записать данные в таблицу: {e}")
     return False
 
-# --- УТИЛИТАРНАЯ ФУНКЦИЯ ДЛЯ СОХРАНЕНИЯ ID СООБЩЕНИЙ ---
+# --- УТИЛИТАРНАЯ ФУНКЦИЯ ДЛЯ ОЧИСТКИ ЧАТА ---
 def add_message_to_delete(context: ContextTypes.DEFAULT_TYPE, message_id: int):
-    """Добавляет ID сообщения в список для последующего удаления."""
     context.user_data.setdefault('messages_to_delete', []).append(message_id)
+
+async def delete_messages(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
+    for msg_id in context.user_data.get('messages_to_delete', []):
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
+        except Exception as e:
+            logger.warning(f"Не удалось удалить сообщение {msg_id}: {e}")
+    context.user_data['messages_to_delete'] = []
 
 # --- ГЛАВНОЕ МЕНЮ И СИСТЕМА НАВИГАЦИИ ---
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """ИСПРАВЛЕНО: Отправляет главное меню с новым дизайном кнопок."""
     keyboard = [
         ["Подать заявку"],
         ["Мои Карты", "Поиск", "Помощь"]
@@ -112,17 +118,16 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     help_text = (
         "<b>Справка по боту</b>\n\n"
-        "▫️ <b>Подать заявку</b> - запуск пошаговой анкеты.\n\n"
-        "▫️ <b>Мои Карты</b> - просмотр всех поданных вами заявок.\n\n"
+        "▫️ <b>Подать заявку</b> - запуск пошаговой анкеты.\n"
+        "▫️ <b>Мои Карты</b> - просмотр всех поданных вами заявок.\n"
         "▫️ <b>Поиск</b> - поиск по вашим заявкам.\n\n"
-        "Бот кэширует данные инициатора для ускорения работы."
+        "Бот кэширует данные инициатора для ускорения работы. Если вы начинаете заполнять заявку, но нажимаете другую кнопку меню, текущая заявка будет отменена."
     )
-    msg = await update.message.reply_text(help_text, parse_mode=ParseMode.HTML)
+    await update.message.reply_text(help_text, parse_mode=ParseMode.HTML)
 
 
 # --- СИСТЕМА ПАГИНАЦИИ ---
 async def display_paginated_list(message_to_edit, context: ContextTypes.DEFAULT_TYPE, page: int, data_key: str, list_title: str):
-    # ... (код без изменений)
     all_items = context.user_data.get(data_key, [])
     if not all_items:
         await message_to_edit.edit_text("🤷 Ничего не найдено.")
@@ -144,7 +149,6 @@ async def display_paginated_list(message_to_edit, context: ContextTypes.DEFAULT_
             f"📅 Дата подачи: {card['date']}\n"
             f"--------------------\n"
         )
-
     keyboard = []
     row = []
     if page > 0:
@@ -153,7 +157,6 @@ async def display_paginated_list(message_to_edit, context: ContextTypes.DEFAULT_
     if end_index < len(all_items):
         row.append(InlineKeyboardButton("Вперед ➡️", callback_data=f"paginate_{data_key}_{page + 1}"))
     keyboard.append(row)
-
     await message_to_edit.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
 
 async def handle_pagination(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -161,7 +164,6 @@ async def handle_pagination(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await query.answer()
     _, data_key, page_str = query.data.split('_')
     page = int(page_str)
-    
     list_title = "Ваши поданные заявки" if data_key == "mycards" else "Результаты поиска"
     await display_paginated_list(query.message, context, page=page, data_key=data_key, list_title=list_title)
 
@@ -181,24 +183,18 @@ async def my_cards_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await display_paginated_list(loading_message, context, page=0, data_key='mycards', list_title="Ваши поданные заявки")
 
 async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    msg = await update.message.reply_text("Введите, что вы хотите найти (имя, фамилию или номер телефона):")
+    await update.message.reply_text("Введите, что вы хотите найти (имя, фамилию или номер телефона):")
     return AWAIT_SEARCH_QUERY
 
 async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = str(update.effective_user.id)
     search_query = update.message.text.lower()
     loading_message = await update.message.reply_text("🔍 Выполняю поиск...")
-
     all_cards = get_all_user_cards_from_sheet(user_id)
     if not all_cards:
         await loading_message.edit_text("🤷 У вас нет заявок для поиска.")
         return ConversationHandler.END
-
-    search_results = [
-        card for card in all_cards
-        if search_query in card['owner_first_name'].lower() or search_query in card['owner_last_name'].lower() or search_query in card['card_number']
-    ]
-
+    search_results = [card for card in all_cards if search_query in card['owner_first_name'].lower() or search_query in card['owner_last_name'].lower() or search_query in card['card_number']]
     context.user_data['search'] = search_results
     await display_paginated_list(loading_message, context, page=0, data_key='search', list_title="Результаты поиска")
     return ConversationHandler.END
@@ -207,18 +203,14 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 # --- ДИАЛОГ ПОДАЧИ ЗАЯВКИ ---
 async def start_form_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     chat = update.effective_chat
-    context.user_data['messages_to_delete'] = [] # Очищаем список сообщений для удаления
+    context.user_data['messages_to_delete'] = []
     
     initiator_data = context.user_data.get('initiator_fio') and {"fio": context.user_data.get('initiator_fio'), "email": context.user_data.get('initiator_email'), "job_title": context.user_data.get('initiator_job_title')}
     
-    form_keys = ['owner_last_name', 'owner_first_name', 'reason', 'card_type', 'card_number', 'category', 'amount', 'frequency', 'comment', 'email', 'fio_initiator', 'job_title']
-    for key in form_keys:
-        if key in context.user_data: del context.user_data[key]
-
     if initiator_data:
-        text = (f"Начинаем новую заявку.\n\nИспользуем сохраненные данные инициатора:\n"
-                f"👤 <b>ФИО:</b> {initiator_data['fio']}\n📧 <b>Почта:</b> {initiator_data['email']}\n"
-                f"🏢 <b>Должность:</b> {initiator_data['job_title']}\n\nПродолжить?")
+        text = (f"Начинаем новую заявку. Используем сохраненные данные:\n\n"
+                f"👤 <b>ФИО:</b> {initiator_data['fio']}\n"
+                f"Продолжить?")
         keyboard = [[InlineKeyboardButton("✅ Да", callback_data="reuse_data"), InlineKeyboardButton("✏️ Ввести заново", callback_data="enter_new_data")]]
         msg = await chat.send_message(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
         add_message_to_delete(context, msg.message_id)
@@ -228,20 +220,20 @@ async def start_form_conversation(update: Update, context: ContextTypes.DEFAULT_
         add_message_to_delete(context, msg.message_id)
         return EMAIL
 
-# ... (все функции get_... теперь должны сохранять message_id)
 async def handle_reuse_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
-    context.user_data['email'] = context.user_data['initiator_email']
-    context.user_data['fio_initiator'] = context.user_data['initiator_fio']
-    context.user_data['job_title'] = context.user_data['initiator_job_title']
     await query.message.delete()
-    msg = await query.message.reply_text("Данные инициатора заполнены.\n\nВведите <b>Фамилию</b> владельца карты.", parse_mode=ParseMode.HTML)
+    
+    if query.data == 'reuse_data':
+        context.user_data['email'] = context.user_data.get('initiator_email')
+        context.user_data['fio_initiator'] = context.user_data.get('initiator_fio')
+        context.user_data['job_title'] = context.user_data.get('initiator_job_title')
+        msg = await query.message.reply_text("Данные инициатора заполнены.\n\nВведите <b>Фамилию</b> владельца карты.", parse_mode=ParseMode.HTML)
+    else: # enter_new_data
+        msg = await query.message.reply_text("Хорошо, введите данные заново.\n\nВаша рабочая почта?")
     add_message_to_delete(context, msg.message_id)
-    return OWNER_LAST_NAME
-
-# И так далее для каждой функции... Я применю это ко всем в итоговом коде
-# ...
+    return OWNER_LAST_NAME if query.data == 'reuse_data' else EMAIL
 
 async def get_email(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data['email'] = update.message.text
@@ -330,7 +322,6 @@ async def get_frequency(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     return COMMENT
 
 def format_summary(data: dict) -> str:
-    # ... (код без изменений)
     owner_full_name = f"{data.get('owner_first_name', '')} {data.get('owner_last_name', '')}".strip()
     card_type = data.get('card_type')
     amount_label = "Скидка" if card_type == 'Скидка' else "Сумма"
@@ -353,35 +344,35 @@ def format_summary(data: dict) -> str:
     )
 
 async def get_comment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    add_message_to_delete(context, update.message.message_id) # Удаляем сообщение пользователя
     context.user_data['comment'] = update.message.text
     summary = format_summary(context.user_data)
     keyboard = [[InlineKeyboardButton("✅ Да, все верно", callback_data="submit"), InlineKeyboardButton("❌ Нет, заполнить заново", callback_data="restart")]]
     msg = await update.message.reply_text(summary, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
-    add_message_to_delete(context, msg.message_id) # Это сообщение тоже удалим
+    add_message_to_delete(context, msg.message_id)
     return CONFIRMATION
 
 async def submit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
     
-    # Удаляем все промежуточные сообщения
-    chat_id = update.effective_chat.id
-    for msg_id in context.user_data.get('messages_to_delete', []):
-        try:
-            await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
-        except Exception as e:
-            logger.warning(f"Не удалось удалить сообщение {msg_id}: {e}")
+    await delete_messages(context, update.effective_chat.id)
 
     user_id = str(query.from_user.id)
     success = write_to_sheet(context.user_data, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), user_id)
     
-    # Отправляем финальное сообщение
     final_text = "✅ Готово! Заявка успешно записана." if success else "❌ Ошибка при записи в таблицу."
-    await context.bot.send_message(chat_id, text=final_text)
+    await context.bot.send_message(update.effective_chat.id, text=final_text)
     
     await show_main_menu(update, context)
     context.user_data.clear()
     return ConversationHandler.END
+
+async def restart_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    await query.message.delete()
+    return await start_form_conversation(update, context)
 
 # --- Функции отмены и прерывания диалогов ---
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -408,7 +399,6 @@ async def fallback_and_start_search(update: Update, context: ContextTypes.DEFAUL
 def main() -> None:
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
-    # Общие обработчики для кнопок, которые должны прерывать диалог
     fallbacks = [
         MessageHandler(filters.Regex("^Мои Карты$"), fallback_and_show_cards),
         MessageHandler(filters.Regex("^Поиск$"), fallback_and_start_search),
@@ -416,37 +406,27 @@ def main() -> None:
         CommandHandler("cancel", cancel)
     ]
 
-    # Диалог для подачи заявки
     form_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^Подать заявку$"), start_form_conversation)],
         states={
-            # ... все состояния ...
-            REUSE_DATA: [CallbackQueryHandler(handle_reuse_choice)],
-            EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_email)],
-            FIO_INITIATOR: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_fio_initiator)],
-            JOB_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_job_title)],
-            OWNER_LAST_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_owner_last_name)],
-            OWNER_FIRST_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_owner_first_name)],
-            REASON: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_reason)],
-            CARD_TYPE: [CallbackQueryHandler(get_card_type)],
-            CARD_NUMBER: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_card_number)],
-            CATEGORY: [CallbackQueryHandler(get_category)],
-            AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_amount)],
-            FREQUENCY: [CallbackQueryHandler(get_frequency)],
+            REUSE_DATA: [CallbackQueryHandler(handle_reuse_choice)], EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_email)],
+            FIO_INITIATOR: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_fio_initiator)], JOB_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_job_title)],
+            OWNER_LAST_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_owner_last_name)], OWNER_FIRST_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_owner_first_name)],
+            REASON: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_reason)], CARD_TYPE: [CallbackQueryHandler(get_card_type)],
+            CARD_NUMBER: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_card_number)], CATEGORY: [CallbackQueryHandler(get_category)],
+            AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_amount)], FREQUENCY: [CallbackQueryHandler(get_frequency)],
             COMMENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_comment)],
             CONFIRMATION: [CallbackQueryHandler(submit, pattern="^submit$"), CallbackQueryHandler(restart_conversation, pattern="^restart$")],
         },
         fallbacks=fallbacks,
     )
 
-    # Диалог для поиска (у него тоже должны быть фолбэки)
     search_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^Поиск$"), search_command)],
         states={ AWAIT_SEARCH_QUERY: [MessageHandler(filters.TEXT & ~filters.COMMAND, perform_search)] },
         fallbacks=fallbacks,
     )
     
-    # Регистрируем все обработчики
     application.add_handler(CommandHandler("start", show_main_menu))
     application.add_handler(form_conv)
     application.add_handler(search_conv)
