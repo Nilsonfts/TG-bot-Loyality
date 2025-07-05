@@ -82,11 +82,14 @@ def write_to_sheet(data: dict, submission_time: str, tg_user_id: str):
     try:
         sheet = client.open_by_key(os.getenv("GOOGLE_SHEET_KEY")).sheet1
         row_to_insert = [
-            submission_time, tg_user_id, data.get('initiator_username', '–'), data.get('initiator_email', ''), 
-            data.get('initiator_fio', ''), data.get('initiator_job_title', ''), data.get('initiator_phone', ''), 
-            data.get('owner_last_name', ''), data.get('owner_first_name', ''), data.get('reason', ''), 
-            data.get('card_type', ''), data.get('card_number', ''), data.get('category', ''), 
-            data.get('amount', ''), data.get('frequency', ''), data.get('comment', ''), 
+            submission_time, tg_user_id,
+            data.get('initiator_username', '–'), data.get('initiator_email', ''), 
+            data.get('initiator_fio', ''), data.get('initiator_job_title', ''), 
+            data.get('initiator_phone', ''), data.get('owner_last_name', ''), 
+            data.get('owner_first_name', ''), data.get('reason', ''), 
+            data.get('card_type', ''), data.get('card_number', ''),
+            data.get('category', ''), data.get('amount', ''), 
+            data.get('frequency', ''), data.get('comment', ''), 
             '', '', '', ''
         ]
         sheet.append_row(row_to_insert, value_input_option='USER_ENTERED')
@@ -97,7 +100,11 @@ def write_to_sheet(data: dict, submission_time: str, tg_user_id: str):
 
 # --- ГЛАВНОЕ МЕНЮ И СИСТЕМА НАВИГАЦИИ ---
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    keyboard = [["✍️ Подать заявку"], ["🗂️ Мои Карты", "🔍 Поиск", "❓ Помощь"]]
+    keyboard = [
+        ["✍️ Подать заявку"],
+        ["🗂️ Мои Карты", "🔍 Поиск"],
+        ["❓ Помощь", "❌ Отмена"]
+    ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
     await context.bot.send_message(chat_id=update.effective_chat.id, text="Вы в главном меню. Выберите действие:", reply_markup=reply_markup)
 
@@ -105,40 +112,31 @@ async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     help_text = ("<b>Справка по боту</b>\n\n"
                  "▫️ <b>Подать заявку</b> - запуск пошаговой анкеты.\n"
                  "▫️ <b>Мои Карты</b> - просмотр всех поданных вами заявок.\n"
-                 "▫️ <b>Поиск</b> - поиск по вашим заявкам.\n\n"
+                 "▫️ <b>Поиск</b> - поиск по вашим заявкам.\n"
+                 "▫️ <b>Отмена</b> - сброс любого действия и возврат в меню.\n\n"
                  "Нажатие на любую кнопку меню во время заполнения анкеты отменит текущее действие.")
     await update.message.reply_text(help_text, parse_mode=ParseMode.HTML)
 
 
-# --- СИСТЕМА ПАГИНАЦИИ ---
+# --- ПАГИНАЦИЯ И ПОИСК ---
 async def display_paginated_list(message_to_edit, context: ContextTypes.DEFAULT_TYPE, page: int, data_key: str, list_title: str):
     all_items = context.user_data.get(data_key, [])
     if not all_items: await message_to_edit.edit_text("🤷 Ничего не найдено."); return
-    
     start_index = page * CARDS_PER_PAGE
     end_index = start_index + CARDS_PER_PAGE
     items_on_page = all_items[start_index:end_index]
     total_pages = (len(all_items) + CARDS_PER_PAGE - 1) // CARDS_PER_PAGE
-    
     text = f"<b>{list_title} (Стр. {page + 1}/{total_pages}):</b>\n\n"
     for card in items_on_page:
         owner_name = f"{card.get('owner_first_name','')} {card.get('owner_last_name','-')}".strip()
-        
-        # Формируем строку с суммой или скидкой
         amount_text = ""
         if card.get('amount'):
-            if card.get('card_type') == 'Скидка':
-                amount_text = f"💰 Скидка: {card['amount']}%\n"
-            else:
-                amount_text = f"💰 Бартер: {card['amount']} ₽\n"
-
-        text += (f"👤 <b>Владелец:</b> {owner_name}\n"
-                 f"📞 Номер: {card['card_number']}\n"
+            if card.get('card_type') == 'Скидка': amount_text = f"💰 Скидка: {card['amount']}%\n"
+            else: amount_text = f"💰 Бартер: {card['amount']} ₽\n"
+        text += (f"👤 <b>Владелец:</b> {owner_name}\n📞 Номер: {card['card_number']}\n"
                  f"{amount_text}"
                  f"<b>Согласование:</b> <code>{card['status_q']}</code> | <b>Активность:</b> <code>{card['status_s']}</code>\n"
-                 f"📅 Дата: {card['date']}\n"
-                 f"--------------------\n")
-    
+                 f"📅 Дата: {card['date']}\n--------------------\n")
     keyboard = []
     row = []
     if page > 0: row.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"paginate_{data_key}_{page - 1}"))
@@ -146,7 +144,6 @@ async def display_paginated_list(message_to_edit, context: ContextTypes.DEFAULT_
     if end_index < len(all_items): row.append(InlineKeyboardButton("Вперед ➡️", callback_data=f"paginate_{data_key}_{page + 1}"))
     keyboard.append(row)
     await message_to_edit.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
-
 async def handle_pagination(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
@@ -156,9 +153,6 @@ async def handle_pagination(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await display_paginated_list(query.message, context, page=page, data_key=data_key, list_title=list_title)
 async def noop_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.callback_query.answer()
-
-
-# --- ФУНКЦИИ КОМАНД МЕНЮ ---
 async def my_cards_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = str(update.effective_user.id)
     loading_message = await update.message.reply_text("🔍 Загружаю ваши заявки...")
@@ -166,11 +160,9 @@ async def my_cards_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if not all_cards: await loading_message.edit_text("🤷 Вы еще не подали ни одной заявки."); return
     context.user_data['mycards'] = all_cards
     await display_paginated_list(loading_message, context, page=0, data_key='mycards', list_title="Ваши поданные заявки")
-
 async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("Введите, что вы хотите найти:")
     return AWAIT_SEARCH_QUERY
-
 async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = str(update.effective_user.id)
     search_query = update.message.text.lower()
@@ -185,7 +177,7 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 # --- ДИАЛОГ ПОДАЧИ ЗАЯВКИ С АВТОРИЗАЦИЕЙ ---
 async def start_form_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    #... (код без изменений)
+    #... (код этой функции и всех шагов анкеты остается таким же, как в последнем коде)
     if context.user_data.get('initiator_registered'):
         await update.message.reply_text("Начинаем подачу новой заявки.\n\nВведите <b>Фамилию</b> владельца карты.", parse_mode=ParseMode.HTML)
         return OWNER_LAST_NAME
@@ -312,11 +304,10 @@ async def restart_conversation(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.answer()
     await query.edit_message_text("Начинаем заявку заново...")
     return await start_form_conversation(update, context)
-async def cancel_and_return_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if context.user_data:
         await update.message.reply_text("Текущее действие отменено.")
         context.user_data.clear()
-    await show_main_menu(update, context)
     return ConversationHandler.END
 
 # --- ОСНОВНАЯ ФУНКЦИЯ ЗАПУСКА БОТА ---
@@ -326,11 +317,15 @@ def main() -> None:
     cards_filter = filters.Regex("^(🗂️ )?Мои Карты$")
     search_filter = filters.Regex("^(🔍 )?Поиск$")
     help_filter = filters.Regex("^(❓ )?Помощь$")
-    state_text_filter = filters.TEXT & ~filters.COMMAND
+    cancel_filter = filters.Regex("^(❌ )?Отмена$")
     
-    cancel_handler = CommandHandler("cancel", cancel_and_return_to_menu)
+    all_menu_filters = form_filter | cards_filter | search_filter | help_filter | cancel_filter
+    state_text_filter = filters.TEXT & ~filters.COMMAND & ~all_menu_filters
 
-    # ИСПРАВЛЕНИЕ: Мы используем block=False, чтобы разрешить другим хендлерам прерывать диалог
+    # ИСПРАВЛЕНИЕ: Универсальный обработчик отмены для всех диалогов
+    # Он сработает, если пользователь нажмет ЛЮБУЮ кнопку меню во время диалога
+    fallback_handler = MessageHandler(all_menu_filters, cancel)
+
     form_conv = ConversationHandler(
         entry_points=[MessageHandler(form_filter, start_form_conversation)],
         states={
@@ -349,24 +344,21 @@ def main() -> None:
             COMMENT: [MessageHandler(state_text_filter, get_comment)],
             CONFIRMATION: [CallbackQueryHandler(submit, pattern="^submit$"), CallbackQueryHandler(restart_conversation, pattern="^restart$")],
         },
-        fallbacks=[cancel_handler],
-        block=False # Ключевое изменение для прерывания
+        fallbacks=[fallback_handler, CommandHandler("cancel", cancel)],
     )
+
     search_conv = ConversationHandler(
         entry_points=[MessageHandler(search_filter, search_command)],
         states={ AWAIT_SEARCH_QUERY: [MessageHandler(state_text_filter, perform_search)] },
-        fallbacks=[cancel_handler],
-        block=False # Ключевое изменение для прерывания
+        fallbacks=[fallback_handler, CommandHandler("cancel", cancel)],
     )
 
-    # Регистрируем обработчики в разных группах. Сначала диалоги, потом обычные команды
-    application.add_handler(form_conv, group=0)
-    application.add_handler(search_conv, group=0)
-    
-    application.add_handler(CommandHandler("start", show_main_menu), group=1)
-    application.add_handler(MessageHandler(cards_filter, my_cards_command), group=1)
-    application.add_handler(MessageHandler(help_filter, show_help), group=1)
-    
+    application.add_handler(CommandHandler("start", show_main_menu))
+    application.add_handler(form_conv)
+    application.add_handler(search_conv)
+    application.add_handler(MessageHandler(cards_filter, my_cards_command))
+    application.add_handler(MessageHandler(help_filter, show_help))
+    application.add_handler(MessageHandler(cancel_filter, show_main_menu)) # Кнопка "Отмена" просто показывает меню
     application.add_handler(CallbackQueryHandler(handle_pagination, pattern=r"^paginate_"))
     application.add_handler(CallbackQueryHandler(noop_callback, pattern=r"^noop$"))
     
