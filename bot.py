@@ -41,11 +41,17 @@ def main() -> None:
         'settings': filters.Regex(f"^{constants.MENU_TEXT_SETTINGS}$"),
         'main': filters.Regex(f"^{constants.MENU_TEXT_MAIN_MENU}$")
     }
-    # Filter for text that is not a command or a menu button
-    text_filter = filters.TEXT & ~filters.COMMAND & ~filters.Regex(
-        '|'.join(v.pattern for v in filters_map.values())
-    )
 
+    # <<< ИЗМЕНЕНИЕ ЗДЕСЬ >>>
+    # Правильный способ объединить фильтры, чтобы исключить их из обработки в диалогах.
+    # Вместо неработающего .join() мы используем оператор | (ИЛИ) для самих фильтров.
+    combined_menu_filter = (
+        filters_map['reg'] | filters_map['submit'] | filters_map['search'] |
+        filters_map['settings'] | filters_map['main']
+    )
+    # Фильтр для текста, который не является ни командой, ни кнопкой меню.
+    text_filter = filters.TEXT & ~filters.COMMAND & ~combined_menu_filter
+    
     # --- Fallback and cancel handlers ---
     fallback_handler = MessageHandler(filters_map['main'], handlers.main_menu_command)
     cancel_handler = CommandHandler("cancel", handlers.cancel)
@@ -110,7 +116,7 @@ def main() -> None:
     application.add_handler(CallbackQueryHandler(handlers.noop_callback, r"^noop$"))
 
     # --- Start the bot ---
-    logger.info("Bot is starting in modular structure...")
+    logger.info("Bot is starting in modular structure (v4)...")
     application.run_polling()
 
 
