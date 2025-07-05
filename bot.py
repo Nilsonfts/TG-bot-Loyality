@@ -77,9 +77,6 @@ def write_to_sheet(data: dict, submission_time: str, tg_user_id: str):
     if not client: return False
     try:
         sheet = client.open_by_key(os.getenv("GOOGLE_SHEET_KEY")).sheet1
-        # Формируем строку ровно из 19 элементов, чтобы соответствовать столбцам A-S
-        # 14 элементов с данными + 5 пустых строк.
-        # Если вы добавите еще столбцы, увеличьте количество пустых строк ''
         row_to_insert = [
             submission_time, tg_user_id, data.get('email', ''), data.get('fio_initiator', ''),
             data.get('job_title', ''), data.get('owner_last_name', ''), data.get('owner_first_name', ''),
@@ -95,25 +92,29 @@ def write_to_sheet(data: dict, submission_time: str, tg_user_id: str):
 
 # --- ГЛАВНОЕ МЕНЮ И СИСТЕМА НАВИГАЦИИ ---
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Отправляет главное меню с основными функциями (БЕЗ ЭМОДЗИ)."""
+    """
+    ИСПРАВЛЕНО: Отправляет главное меню. Работает из любого контекста.
+    """
     keyboard = [
         ["Подать заявку", "Мои Карты"],
         ["Поиск", "Помощь"]
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-    await update.message.reply_text(
-        "Добро пожаловать! Выберите действие:",
+    
+    # Используем effective_chat.id для универсальности
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text="Вы в главном меню. Выберите действие:",
         reply_markup=reply_markup
     )
 
 async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Отправляет справочное сообщение."""
     help_text = (
         "<b>Справка по боту</b>\n\n"
         "▫️ <b>Подать заявку</b> - запуск пошаговой анкеты для регистрации новой карты лояльности.\n\n"
         "▫️ <b>Мои Карты</b> - просмотр всех поданных вами заявок со статусами.\n\n"
-        "▫️ <b>Поиск</b> - поиск по вашим заявкам (по имени, фамилии или номеру телефона).\n\n"
-        "Бот автоматически запоминает данные инициатора (вас) для ускорения процесса в будущем."
+        "▫️ <b>Поиск</b> - поиск по вашим заявкам.\n\n"
+        "Бот автоматически кэширует данные инициатора для ускорения процесса."
     )
     await update.message.reply_text(help_text, parse_mode=ParseMode.HTML)
 
@@ -203,13 +204,8 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 # --- ДИАЛОГ ПОДАЧИ ЗАЯВКИ ---
 async def start_form_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    # ... (код этой функции и всех шагов анкеты остается таким же, как в прошлый раз)
-    # Я его включу в финальный блок для полноты
-    user_id = str(update.effective_user.id)
     chat = update.effective_chat
     
-    # Кэширование данных инициатора больше не нужно, т.к. поиск по таблице быстрый
-    # Но для удобства можно оставить, чтобы не дергать таблицу каждый раз
     initiator_data = context.user_data.get('initiator_fio') and {
         "fio": context.user_data.get('initiator_fio'), "email": context.user_data.get('initiator_email'),
         "job_title": context.user_data.get('initiator_job_title')
@@ -263,6 +259,7 @@ async def get_job_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     await update.message.reply_text("Спасибо. Теперь введите <b>Фамилию</b> владельца карты.", parse_mode=ParseMode.HTML)
     return OWNER_LAST_NAME
 
+# ... (остальные функции get_... остаются без изменений)
 async def get_owner_last_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data['owner_last_name'] = update.message.text
     await update.message.reply_text("<b>Имя</b> владельца карты.", parse_mode=ParseMode.HTML)
@@ -351,6 +348,7 @@ async def get_comment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     return CONFIRMATION
 
 async def submit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """ИСПРАВЛЕНО: Корректно вызывает show_main_menu."""
     query = update.callback_query
     await query.answer()
     await query.edit_message_text("Сохраняю...")
@@ -361,7 +359,9 @@ async def submit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     else:
         await query.edit_message_text("❌ Ошибка при записи в таблицу.")
     
-    await show_main_menu(query.message, context)
+    # Передаем оригинальный update, чтобы show_main_menu мог извлечь chat_id
+    await show_main_menu(update, context)
+    
     # Очищаем только данные формы, оставляя кэш инициатора
     form_keys = ['owner_last_name', 'owner_first_name', 'reason', 'card_type', 'card_number', 'category', 'amount', 'frequency', 'comment', 'email', 'fio_initiator', 'job_title']
     for key in form_keys:
@@ -377,12 +377,12 @@ async def restart_conversation(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("Действие отменено.")
-    await show_main_menu(update.message, context)
+    await show_main_menu(update, context)
     return ConversationHandler.END
 
 async def cancel_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("Поиск отменен.")
-    await show_main_menu(update.message, context)
+    await show_main_menu(update, context)
     return ConversationHandler.END
 
 
