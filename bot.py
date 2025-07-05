@@ -54,6 +54,30 @@ def get_gspread_client():
         logger.error(f"Ошибка аутентификации в Google Sheets: {e}")
     return None
 
+def find_initiator_in_sheet(user_id: str):
+    """Ищет последнюю запись пользователя в таблице и возвращает его данные для кэша."""
+    client = get_gspread_client()
+    if not client: return None
+    try:
+        sheet = client.open_by_key(os.getenv("GOOGLE_SHEET_KEY")).sheet1
+        # Используем get_all_values для надежности
+        all_rows = sheet.get_all_values()
+        # Ищем с конца, чтобы найти самую последнюю запись
+        for row in reversed(all_rows):
+            if len(row) > 1 and str(row[1]) == user_id:
+                # Порядок столбцов: B(1):ID, C(2):Тег, D(3):Почта, E(4):ФИО, F(5):Должность, G(6):Телефон
+                if len(row) >= 7:
+                    return {
+                        "initiator_username": row[2],
+                        "initiator_email": row[3],
+                        "initiator_fio": row[4],
+                        "initiator_job_title": row[5],
+                        "initiator_phone": row[6]
+                    }
+    except Exception as e:
+        logger.error(f"Ошибка при поиске инициатора в таблице: {e}")
+    return None
+
 def get_all_user_cards_from_sheet(user_id: str) -> list:
     client = get_gspread_client()
     if not client: return []
@@ -64,7 +88,7 @@ def get_all_user_cards_from_sheet(user_id: str) -> list:
         user_cards = []
         for row in data_rows:
             if len(row) > 1 and str(row[1]) == user_id:
-                # ИСПРАВЛЕНЫ ИНДЕКСЫ с учетом новых столбцов
+                # Индексы с учетом всех столбцов (A=0, B=1, ..., T=19)
                 if len(row) >= 20: 
                     card_info = {
                         "date": row[0], "owner_last_name": row[7], "owner_first_name": row[8],
@@ -81,6 +105,7 @@ def write_to_sheet(data: dict, submission_time: str, tg_user_id: str):
     if not client: return False
     try:
         sheet = client.open_by_key(os.getenv("GOOGLE_SHEET_KEY")).sheet1
+        # Строка из 20 элементов для столбцов A-T
         row_to_insert = [
             submission_time, tg_user_id,
             data.get('initiator_username', '–'), data.get('initiator_email', ''), 
@@ -90,7 +115,7 @@ def write_to_sheet(data: dict, submission_time: str, tg_user_id: str):
             data.get('card_type', ''), data.get('card_number', ''),
             data.get('category', ''), data.get('amount', ''), 
             data.get('frequency', ''), data.get('comment', ''), 
-            '', '', '', '' # Заполнители для столбцов Q, R, S, T
+            '', '', '', ''
         ]
         sheet.append_row(row_to_insert, value_input_option='USER_ENTERED')
         return True
@@ -105,12 +130,7 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await context.bot.send_message(chat_id=update.effective_chat.id, text="Вы в главном меню. Выберите действие:", reply_markup=reply_markup)
 
 async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    help_text = ("<b>Справка по боту</b>\n\n"
-                 "▫️ <b>Подать заявку</b> - запуск пошаговой анкеты.\n"
-                 "▫️ <b>Мои Карты</b> - просмотр всех поданных вами заявок.\n"
-                 "▫️ <b>Поиск</b> - поиск по вашим заявкам.\n\n"
-                 "Нажатие на любую кнопку меню во время заполнения анкеты отменит текущее действие.")
-    await update.message.reply_text(help_text, parse_mode=ParseMode.HTML)
+    await update.message.reply_text("Выберите действие в главном меню.")
 
 
 # --- ПАГИНАЦИЯ И ПОИСК ---
@@ -167,13 +187,25 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 # --- ДИАЛОГ ПОДАЧИ ЗАЯВКИ С АВТОРИЗАЦИЕЙ ---
 async def start_form_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Начинает диалог: проверяет кэш, затем таблицу, и только потом предлагает регистрацию."""
+    user_id = str(update.effective_user.id)
     if context.user_data.get('initiator_registered'):
-        await update.message.reply_text("Начинаем подачу новой заявки.\n\nВведите <b>Фамилию</b> владельца карты.", parse_mode=ParseMode.HTML)
+        await update.message.reply_text("С возвращением! Начинаем подачу новой заявки.\n\nВведите <b>Фамилию</b> владельца карты.", parse_mode=ParseMode.HTML)
+        return OWNER_LAST_NAME
+
+    logger.info(f"Кэш для пользователя {user_id} пуст, ищем в таблице...")
+    initiator_data = find_initiator_in_sheet(user_id)
+    if initiator_data:
+        logger.info(f"Данные для {user_id} найдены в таблице, кэшируем и начинаем.")
+        context.user_data.update(initiator_data)
+        context.user_data['initiator_registered'] = True
+        await update.message.reply_text(f"С возвращением, {initiator_data['initiator_fio']}! Ваши данные загружены из базы.\n\nВведите <b>Фамилию</b> владельца карты.", parse_mode=ParseMode.HTML)
         return OWNER_LAST_NAME
     else:
+        logger.info(f"Пользователь {user_id} не найден. Начинаем регистрацию.")
         keyboard = [[KeyboardButton("📱 Авторизоваться (поделиться контактом)", request_contact=True)]]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
-        await update.message.reply_text("Здравствуйте! Для начала работы, пожалуйста, пройдите быструю авторизацию.", reply_markup=reply_markup)
+        await update.message.reply_text("Здравствуйте! Похоже, вы здесь впервые. Для начала работы, пожалуйста, пройдите быструю авторизацию.", reply_markup=reply_markup)
         return REGISTER_CONTACT
 
 async def handle_contact_registration(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -181,7 +213,7 @@ async def handle_contact_registration(update: Update, context: ContextTypes.DEFA
     user = update.effective_user
     if contact.user_id != user.id:
         await update.message.reply_text("Пожалуйста, поделитесь своим собственным контактом.", reply_markup=ReplyKeyboardRemove())
-        return ConversationHandler.END
+        return await cancel_and_return_to_menu(update, context)
     
     context.user_data['initiator_phone'] = contact.phone_number.replace('+', '')
     context.user_data['initiator_username'] = f"@{user.username}" if user.username else "–"
