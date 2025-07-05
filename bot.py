@@ -92,7 +92,7 @@ def write_to_sheet(data: dict, submission_time: str, tg_user_id: str):
 
 # --- ГЛАВНОЕ МЕНЮ И СИСТЕМА НАВИГАЦИИ ---
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Отправляет главное меню с эмодзи."""
+    """Отправляет главное меню с эмодзи и новым дизайном кнопок."""
     keyboard = [
         ["✍️ Подать заявку"],
         ["🗂️ Мои Карты", "🔍 Поиск", "❓ Помощь"]
@@ -105,12 +105,13 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     )
 
 async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Отправляет справочное сообщение."""
     help_text = (
         "<b>Справка по боту</b>\n\n"
         "▫️ <b>Подать заявку</b> - запуск пошаговой анкеты.\n"
         "▫️ <b>Мои Карты</b> - просмотр всех поданных вами заявок.\n"
         "▫️ <b>Поиск</b> - поиск по вашим заявкам.\n\n"
-        "Если вы начинаете заполнять заявку, но нажимаете другую кнопку меню, текущая заявка будет отменена."
+        "Если вы начали заполнять заявку, но нажали другую кнопку меню, текущая заявка будет отменена."
     )
     await update.message.reply_text(help_text, parse_mode=ParseMode.HTML)
 
@@ -214,7 +215,7 @@ async def handle_reuse_choice(update: Update, context: ContextTypes.DEFAULT_TYPE
         context.user_data['job_title'] = context.user_data.get('initiator_job_title')
         await query.edit_message_text("Данные инициатора заполнены.\n\nВведите <b>Фамилию</b> владельца карты.", parse_mode=ParseMode.HTML)
         return OWNER_LAST_NAME
-    else:
+    else: # enter_new_data
         await query.edit_message_text("Хорошо, введите данные заново.\n\nВаша рабочая почта?")
         return EMAIL
 
@@ -308,7 +309,7 @@ def format_summary(data: dict) -> str:
         "--- <b>Карта лояльности</b> ---\n"
         f"💳 <b>Владелец:</b> {owner_full_name}\n"
         f"📞 <b>Номер:</b> {data.get('card_number', '-')}\n"
-        f"   <i><small>(он же является номером телефона)</small></i>\n"
+        f"   <i>(он же является номером телефона)</i>\n"
         f"✨ <b>Тип:</b> {card_type}\n"
         f"💰 <b>{amount_label}:</b> {amount_value}\n"
         f"📈 <b>Статья:</b> {data.get('category', '-')}\n"
@@ -338,11 +339,7 @@ async def submit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     else:
         status_text = "\n\n<b>Статус:</b> ❌ Ошибка при записи в таблицу."
         
-    await query.edit_message_text(
-        text=original_text + status_text,
-        parse_mode=ParseMode.HTML,
-        reply_markup=None
-    )
+    await query.edit_message_text(text=original_text + status_text, parse_mode=ParseMode.HTML, reply_markup=None)
     
     await show_main_menu(update, context)
     context.user_data.clear()
@@ -359,12 +356,6 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await show_main_menu(update, context)
     return ConversationHandler.END
 
-async def cancel_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.message.reply_text("Поиск отменен.")
-    await show_main_menu(update, context)
-    return ConversationHandler.END
-
-
 # --- ОСНОВНАЯ ФУНКЦИЯ ЗАПУСКА БОТА ---
 def main() -> None:
     if not TELEGRAM_BOT_TOKEN:
@@ -379,6 +370,15 @@ def main() -> None:
     search_filter = filters.Regex("^(🔍 )?Поиск$")
     help_filter = filters.Regex("^(❓ )?Помощь$")
 
+    # Фолбэки для прерывания диалогов
+    fallbacks = [
+        MessageHandler(cards_filter, cancel),
+        MessageHandler(search_filter, cancel),
+        MessageHandler(help_filter, cancel),
+        CommandHandler("cancel", cancel),
+        CommandHandler("start", cancel),
+    ]
+
     form_conv = ConversationHandler(
         entry_points=[MessageHandler(form_filter, start_form_conversation)],
         states={
@@ -391,13 +391,13 @@ def main() -> None:
             COMMENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_comment)],
             CONFIRMATION: [CallbackQueryHandler(submit, pattern="^submit$"), CallbackQueryHandler(restart_conversation, pattern="^restart$")],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        fallbacks=fallbacks,
     )
 
     search_conv = ConversationHandler(
         entry_points=[MessageHandler(search_filter, search_command)],
         states={ AWAIT_SEARCH_QUERY: [MessageHandler(filters.TEXT & ~filters.COMMAND, perform_search)] },
-        fallbacks=[CommandHandler("cancel", cancel_search)],
+        fallbacks=fallbacks,
     )
 
     application.add_handler(CommandHandler("start", show_main_menu))
