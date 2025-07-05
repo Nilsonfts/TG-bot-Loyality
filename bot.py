@@ -51,61 +51,59 @@ def get_gspread_client():
             creds = Credentials.from_service_account_info(creds_info, scopes=scopes)
             return gspread.authorize(creds)
     except Exception as e:
-        logger.error(f"Ошибка аутентификации в Google Sheets: {e}")
-    return None
-
-def find_initiator_in_sheet(user_id: str):
-    """Ищет последнюю запись пользователя в таблице и возвращает его данные для кэша."""
-    client = get_gspread_client()
-    if not client: return None
-    try:
-        sheet = client.open_by_key(os.getenv("GOOGLE_SHEET_KEY")).sheet1
-        # Используем get_all_values для надежности
-        all_rows = sheet.get_all_values()
-        # Ищем с конца, чтобы найти самую последнюю запись
-        for row in reversed(all_rows):
-            if len(row) > 1 and str(row[1]) == user_id:
-                # Порядок столбцов: B(1):ID, C(2):Тег, D(3):Почта, E(4):ФИО, F(5):Должность, G(6):Телефон
-                if len(row) >= 7:
-                    return {
-                        "initiator_username": row[2],
-                        "initiator_email": row[3],
-                        "initiator_fio": row[4],
-                        "initiator_job_title": row[5],
-                        "initiator_phone": row[6]
-                    }
-    except Exception as e:
-        logger.error(f"Ошибка при поиске инициатора в таблице: {e}")
+        logger.error(f"ОТЛАДКА: Ошибка аутентификации в Google Sheets: {e}")
     return None
 
 def get_all_user_cards_from_sheet(user_id: str) -> list:
+    """
+    ОТЛАДОЧНАЯ ВЕРСИЯ: Логирует каждый шаг сравнения.
+    """
     client = get_gspread_client()
-    if not client: return []
+    if not client: 
+        logger.error("ОТЛАДКА: gspread client не создан.")
+        return []
     try:
         sheet = client.open_by_key(os.getenv("GOOGLE_SHEET_KEY")).sheet1
         all_rows = sheet.get_all_values()
-        data_rows = all_rows[1:]
+        data_rows = all_rows[1:] # Пропускаем заголовок
+        
+        logger.info(f"--- НАЧАЛО ПОИСКА ДЛЯ ID: [{user_id}] (тип: {type(user_id)}) ---")
+        logger.info(f"Всего строк в таблице для проверки: {len(data_rows)}")
+
         user_cards = []
-        for row in data_rows:
-            if len(row) > 1 and str(row[1]) == user_id:
-                # Индексы с учетом всех столбцов (A=0, B=1, ..., T=19)
-                if len(row) >= 20: 
-                    card_info = {
-                        "date": row[0], "owner_last_name": row[7], "owner_first_name": row[8],
-                        "card_number": row[11], "status_q": row[17] or "–", "status_s": row[19] or "–"
-                    }
-                    cards.append(card_info)
+        for i, row in enumerate(data_rows, 2): # Начинаем нумерацию с 2 для удобства
+            if len(row) > 1:
+                sheet_id = row[1].strip() # ID из таблицы, убираем пробелы
+                
+                # Логируем каждое сравнение
+                logger.info(f"Строка #{i}: Сравниваем ID из таблицы [{sheet_id}] (тип: {type(sheet_id)}) с искомым ID [{user_id}]")
+                
+                if sheet_id == user_id:
+                    logger.info(f"!!! СОВПАДЕНИЕ НАЙДЕНО в строке {i} !!!")
+                    if len(row) >= 20:
+                        card_info = {
+                            "date": row[0], "owner_last_name": row[7], "owner_first_name": row[8],
+                            "card_number": row[11], "status_q": row[17] or "–", "status_s": row[19] or "–"
+                        }
+                        user_cards.append(card_info)
+            else:
+                logger.warning(f"Строка #{i} пустая или слишком короткая.")
+
+        if not user_cards:
+            logger.warning(f"--- ПОИСК ЗАВЕРШЕН. СОВПАДЕНИЙ НЕ НАЙДЕНО для ID: [{user_id}] ---")
+        else:
+            logger.info(f"--- ПОИСК ЗАВЕРШЕН. Найдено {len(user_cards)} карт. ---")
+            
         return list(reversed(user_cards))
     except Exception as e:
-        logger.error(f"Ошибка при поиске карт пользователя: {e}")
-    return []
+        logger.error(f"ОТЛАДКА: Исключение в get_all_user_cards_from_sheet: {e}")
+        return []
 
 def write_to_sheet(data: dict, submission_time: str, tg_user_id: str):
     client = get_gspread_client()
     if not client: return False
     try:
         sheet = client.open_by_key(os.getenv("GOOGLE_SHEET_KEY")).sheet1
-        # Строка из 20 элементов для столбцов A-T
         row_to_insert = [
             submission_time, tg_user_id,
             data.get('initiator_username', '–'), data.get('initiator_email', ''), 
@@ -118,6 +116,7 @@ def write_to_sheet(data: dict, submission_time: str, tg_user_id: str):
             '', '', '', ''
         ]
         sheet.append_row(row_to_insert, value_input_option='USER_ENTERED')
+        logger.info(f"Успешно записана строка для пользователя {tg_user_id}")
         return True
     except Exception as e:
         logger.error(f"Не удалось записать данные в таблицу: {e}")
@@ -187,25 +186,13 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 # --- ДИАЛОГ ПОДАЧИ ЗАЯВКИ С АВТОРИЗАЦИЕЙ ---
 async def start_form_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Начинает диалог: проверяет кэш, затем таблицу, и только потом предлагает регистрацию."""
-    user_id = str(update.effective_user.id)
     if context.user_data.get('initiator_registered'):
-        await update.message.reply_text("С возвращением! Начинаем подачу новой заявки.\n\nВведите <b>Фамилию</b> владельца карты.", parse_mode=ParseMode.HTML)
-        return OWNER_LAST_NAME
-
-    logger.info(f"Кэш для пользователя {user_id} пуст, ищем в таблице...")
-    initiator_data = find_initiator_in_sheet(user_id)
-    if initiator_data:
-        logger.info(f"Данные для {user_id} найдены в таблице, кэшируем и начинаем.")
-        context.user_data.update(initiator_data)
-        context.user_data['initiator_registered'] = True
-        await update.message.reply_text(f"С возвращением, {initiator_data['initiator_fio']}! Ваши данные загружены из базы.\n\nВведите <b>Фамилию</b> владельца карты.", parse_mode=ParseMode.HTML)
+        await update.message.reply_text("Начинаем подачу новой заявки.\n\nВведите <b>Фамилию</b> владельца карты.", parse_mode=ParseMode.HTML)
         return OWNER_LAST_NAME
     else:
-        logger.info(f"Пользователь {user_id} не найден. Начинаем регистрацию.")
         keyboard = [[KeyboardButton("📱 Авторизоваться (поделиться контактом)", request_contact=True)]]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
-        await update.message.reply_text("Здравствуйте! Похоже, вы здесь впервые. Для начала работы, пожалуйста, пройдите быструю авторизацию.", reply_markup=reply_markup)
+        await update.message.reply_text("Здравствуйте! Для начала работы, пожалуйста, пройдите быструю авторизацию.", reply_markup=reply_markup)
         return REGISTER_CONTACT
 
 async def handle_contact_registration(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -214,10 +201,9 @@ async def handle_contact_registration(update: Update, context: ContextTypes.DEFA
     if contact.user_id != user.id:
         await update.message.reply_text("Пожалуйста, поделитесь своим собственным контактом.", reply_markup=ReplyKeyboardRemove())
         return await cancel_and_return_to_menu(update, context)
-    
     context.user_data['initiator_phone'] = contact.phone_number.replace('+', '')
     context.user_data['initiator_username'] = f"@{user.username}" if user.username else "–"
-    await update.message.reply_text("✅ Контакт получен!\n\n👤 Теперь введите ваше <b>полное ФИО</b> для отчетности.", reply_markup=ReplyKeyboardRemove(), parse_mode=ParseMode.HTML)
+    await update.message.reply_text("✅ Контакт получен!\n\n👤 Введите ваше <b>полное ФИО</b> для отчетности.", reply_markup=ReplyKeyboardRemove(), parse_mode=ParseMode.HTML)
     return REGISTER_FIO
 
 async def get_registration_fio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
