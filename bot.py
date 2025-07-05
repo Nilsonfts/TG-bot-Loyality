@@ -92,9 +92,10 @@ def write_to_sheet(data: dict, submission_time: str, tg_user_id: str):
 
 # --- ГЛАВНОЕ МЕНЮ И СИСТЕМА НАВИГАЦИИ ---
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Отправляет главное меню с эмодзи."""
     keyboard = [
-        ["Подать заявку"],
-        ["Мои Карты", "Поиск", "Помощь"]
+        ["✍️ Подать заявку"],
+        ["🗂️ Мои Карты", "🔍 Поиск", "❓ Помощь"]
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     await context.bot.send_message(
@@ -330,18 +331,17 @@ async def submit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = str(query.from_user.id)
     success = write_to_sheet(context.user_data, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), user_id)
     
-    original_text = query.message.text_html # Сохраняем исходный текст карточки
+    original_text = query.message.text_html
     
     if success:
         status_text = "\n\n<b>Статус:</b> ✅ Заявка успешно записана."
     else:
         status_text = "\n\n<b>Статус:</b> ❌ Ошибка при записи в таблицу."
         
-    # Редактируем карточку, добавляя статус и убирая кнопки
     await query.edit_message_text(
         text=original_text + status_text,
         parse_mode=ParseMode.HTML,
-        reply_markup=None # Убирает кнопки "Да/Нет"
+        reply_markup=None
     )
     
     await show_main_menu(update, context)
@@ -364,6 +364,7 @@ async def cancel_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     await show_main_menu(update, context)
     return ConversationHandler.END
 
+
 # --- ОСНОВНАЯ ФУНКЦИЯ ЗАПУСКА БОТА ---
 def main() -> None:
     if not TELEGRAM_BOT_TOKEN:
@@ -372,8 +373,14 @@ def main() -> None:
 
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
+    # Умные фильтры, которые работают с эмодзи и без
+    form_filter = filters.Regex("^(✍️ )?Подать заявку$")
+    cards_filter = filters.Regex("^(🗂️ )?Мои Карты$")
+    search_filter = filters.Regex("^(🔍 )?Поиск$")
+    help_filter = filters.Regex("^(❓ )?Помощь$")
+
     form_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex("^Подать заявку$"), start_form_conversation)],
+        entry_points=[MessageHandler(form_filter, start_form_conversation)],
         states={
             REUSE_DATA: [CallbackQueryHandler(handle_reuse_choice)], EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_email)],
             FIO_INITIATOR: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_fio_initiator)], JOB_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_job_title)],
@@ -388,7 +395,7 @@ def main() -> None:
     )
 
     search_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex("^Поиск$"), search_command)],
+        entry_points=[MessageHandler(search_filter, search_command)],
         states={ AWAIT_SEARCH_QUERY: [MessageHandler(filters.TEXT & ~filters.COMMAND, perform_search)] },
         fallbacks=[CommandHandler("cancel", cancel_search)],
     )
@@ -396,8 +403,8 @@ def main() -> None:
     application.add_handler(CommandHandler("start", show_main_menu))
     application.add_handler(form_conv)
     application.add_handler(search_conv)
-    application.add_handler(MessageHandler(filters.Regex("^Мои Карты$"), my_cards_command))
-    application.add_handler(MessageHandler(filters.Regex("^Помощь$"), show_help))
+    application.add_handler(MessageHandler(cards_filter, my_cards_command))
+    application.add_handler(MessageHandler(help_filter, show_help))
     application.add_handler(CallbackQueryHandler(handle_pagination, pattern=r"^paginate_"))
     application.add_handler(CallbackQueryHandler(noop_callback, pattern=r"^noop$"))
     
