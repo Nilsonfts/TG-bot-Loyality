@@ -98,33 +98,55 @@ async def get_registration_email(update: Update, context: ContextTypes.DEFAULT_T
 
 async def finish_registration(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
-    Finishes registration, saves data, and shows the main menu.
-    This function was modified to avoid the G-Sheets API race condition.
+    Finishes registration, saves data to sheet AND cache, and shows the main menu.
     """
+    user_id = str(update.effective_user.id)
     context.user_data['initiator_job_title'] = update.message.text
+    
     success = g_sheets.write_to_sheet(
         data=context.user_data,
         submission_time=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        tg_user_id=str(update.effective_user.id)
+        tg_user_id=user_id
     )
-    context.user_data.clear()
 
     if success:
-        # On success, we KNOW the user is registered. We don't need to check again.
-        # We immediately show the full keyboard to avoid the API delay issue.
-        await update.message.reply_text("🎉 <b>Регистрация успешно завершена!</b>", parse_mode=ParseMode.HTML, reply_markup=ReplyKeyboardRemove())
+        # NEW: Cache the user data on successful registration
+        g_sheets.cache_user_data(user_id, context.user_data)
         
+        await update.message.reply_text("🎉 <b>Регистрация успешно завершена!</b>", parse_mode=ParseMode.HTML, reply_markup=ReplyKeyboardRemove())
         full_keyboard = keyboards.get_main_menu_keyboard(is_registered=True)
         await update.message.reply_text("Теперь вам доступны все функции бота.", reply_markup=full_keyboard)
     else:
-        # On failure, show the registration menu again.
         await update.message.reply_text(
             "❌ Ошибка при сохранении регистрации. Пожалуйста, попробуйте снова.",
             reply_markup=keyboards.get_main_menu_keyboard(is_registered=False)
         )
-
+        
+    context.user_data.clear()
     return ConversationHandler.END
 
+
+# --- APPLICATION FORM CONVERSATION HANDLERS ---
+async def start_form_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Starts the application form, using the new cache-aware function."""
+    context.user_data.clear()
+    user_id = str(update.effective_user.id)
+    
+    # NEW: Use the cache-aware function to get data
+    initiator_data = g_sheets.get_initiator_data(user_id)
+    
+    if not initiator_data:
+        await update.message.reply_text("Ошибка: не удалось найти ваши регистрационные данные.\nПожалуйста, перезапустите бота командой /start.")
+        return await cancel(update, context)
+
+    context.user_data.update(initiator_data)
+    await update.message.reply_text(
+        f"Начинаем подачу новой заявки.\nВведите <b>Фамилию</b> владельца карты.",
+        parse_mode=ParseMode.HTML, reply_markup=ReplyKeyboardRemove()
+    )
+    return OWNER_LAST_NAME
+
+# The rest of the file remains the same...
 
 # --- SETTINGS & FEATURES CALLBACK HANDLERS ---
 async def back_to_settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -191,7 +213,6 @@ async def export_csv_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     await query.message.delete()
 
 # --- PAGINATION & SEARCH HANDLERS ---
-
 async def display_paginated_list(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int, data_key: str, list_title: str):
     """Generic function to display a paginated list of items."""
     message_to_edit = update.callback_query.message
@@ -287,7 +308,6 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     context.user_data['search_results'] = results
     await loading_msg.delete()
     
-    # Mock an update to reuse the display function
     class MockUpdate:
         def __init__(self, msg, user):
             self.callback_query = type('MockCQ', (), {'message': msg})()
@@ -295,23 +315,6 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             
     await display_paginated_list(MockUpdate(update.message, update.effective_user), context, page=0, data_key='search_results', list_title="Результаты поиска")
     return ConversationHandler.END
-
-
-# --- APPLICATION FORM CONVERSATION HANDLERS ---
-async def start_form_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Starts the application form for a registered user."""
-    context.user_data.clear()
-    initiator_data = g_sheets.find_initiator_in_sheet(str(update.effective_user.id))
-    if not initiator_data:
-        await update.message.reply_text("Ошибка: не удалось найти ваши регистрационные данные. Пожалуйста, перезапустите бота командой /start.")
-        return await cancel(update, context)
-
-    context.user_data.update(initiator_data)
-    await update.message.reply_text(
-        f"Начинаем подачу новой заявки.\nВведите <b>Фамилию</b> владельца карты.",
-        parse_mode=ParseMode.HTML, reply_markup=ReplyKeyboardRemove()
-    )
-    return OWNER_LAST_NAME
 
 async def get_owner_last_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data['owner_last_name'] = update.message.text
