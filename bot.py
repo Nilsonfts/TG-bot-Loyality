@@ -63,13 +63,12 @@ def get_all_user_cards_from_sheet(user_id: str) -> list:
         data_rows = all_rows[1:]
         user_cards = []
         for row in data_rows:
-            # Сравниваем ID как строки, чтобы избежать проблем с форматом
             if len(row) > 1 and str(row[1]) == user_id:
-                # ИНДЕКСЫ СДВИНУТЫ из-за новых столбцов
+                # ИСПРАВЛЕНЫ ИНДЕКСЫ с учетом новых столбцов
                 if len(row) >= 20: 
                     card_info = {
-                        "date": row[0], "owner_first_name": row[7], "owner_last_name": row[6],
-                        "card_number": row[10], "status_q": row[17] or "–", "status_s": row[19] or "–"
+                        "date": row[0], "owner_last_name": row[7], "owner_first_name": row[8],
+                        "card_number": row[11], "status_q": row[17] or "–", "status_s": row[19] or "–"
                     }
                     cards.append(card_info)
         return list(reversed(user_cards))
@@ -84,13 +83,14 @@ def write_to_sheet(data: dict, submission_time: str, tg_user_id: str):
         sheet = client.open_by_key(os.getenv("GOOGLE_SHEET_KEY")).sheet1
         row_to_insert = [
             submission_time, tg_user_id,
-            data.get('initiator_username', '–'),
-            data.get('initiator_email', ''), data.get('initiator_fio', ''),
-            data.get('initiator_job_title', ''), data.get('initiator_phone', ''),
-            data.get('owner_last_name', ''), data.get('owner_first_name', ''),
-            data.get('reason', ''), data.get('card_type', ''), data.get('card_number', ''),
-            data.get('category', ''), data.get('amount', ''), data.get('frequency', ''),
-            data.get('comment', ''), '', '', '', ''
+            data.get('initiator_username', '–'), data.get('initiator_email', ''), 
+            data.get('initiator_fio', ''), data.get('initiator_job_title', ''), 
+            data.get('initiator_phone', ''), data.get('owner_last_name', ''), 
+            data.get('owner_first_name', ''), data.get('reason', ''), 
+            data.get('card_type', ''), data.get('card_number', ''),
+            data.get('category', ''), data.get('amount', ''), 
+            data.get('frequency', ''), data.get('comment', ''), 
+            '', '', '', '' # Заполнители для столбцов Q, R, S, T
         ]
         sheet.append_row(row_to_insert, value_input_option='USER_ENTERED')
         return True
@@ -101,11 +101,16 @@ def write_to_sheet(data: dict, submission_time: str, tg_user_id: str):
 # --- ГЛАВНОЕ МЕНЮ И СИСТЕМА НАВИГАЦИИ ---
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     keyboard = [["✍️ Подать заявку"], ["🗂️ Мои Карты", "🔍 Поиск", "❓ Помощь"]]
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
     await context.bot.send_message(chat_id=update.effective_chat.id, text="Вы в главном меню. Выберите действие:", reply_markup=reply_markup)
 
 async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text("Выберите действие в главном меню.")
+    help_text = ("<b>Справка по боту</b>\n\n"
+                 "▫️ <b>Подать заявку</b> - запуск пошаговой анкеты.\n"
+                 "▫️ <b>Мои Карты</b> - просмотр всех поданных вами заявок.\n"
+                 "▫️ <b>Поиск</b> - поиск по вашим заявкам.\n\n"
+                 "Нажатие на любую кнопку меню во время заполнения анкеты отменит текущее действие.")
+    await update.message.reply_text(help_text, parse_mode=ParseMode.HTML)
 
 
 # --- ПАГИНАЦИЯ И ПОИСК ---
@@ -162,7 +167,6 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 # --- ДИАЛОГ ПОДАЧИ ЗАЯВКИ С АВТОРИЗАЦИЕЙ ---
 async def start_form_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Начинает диалог: проверяет, зарегистрирован ли пользователь. Если нет - просит контакт."""
     if context.user_data.get('initiator_registered'):
         await update.message.reply_text("Начинаем подачу новой заявки.\n\nВведите <b>Фамилию</b> владельца карты.", parse_mode=ParseMode.HTML)
         return OWNER_LAST_NAME
@@ -181,13 +185,12 @@ async def handle_contact_registration(update: Update, context: ContextTypes.DEFA
     
     context.user_data['initiator_phone'] = contact.phone_number.replace('+', '')
     context.user_data['initiator_username'] = f"@{user.username}" if user.username else "–"
-    
-    await update.message.reply_text("✅ Контакт получен! Теперь, пожалуйста, введите ваше **полное ФИО** для отчетности.", reply_markup=ReplyKeyboardRemove(), parse_mode=ParseMode.HTML)
+    await update.message.reply_text("✅ Контакт получен!\n\n👤 Теперь введите ваше <b>полное ФИО</b> для отчетности.", reply_markup=ReplyKeyboardRemove(), parse_mode=ParseMode.HTML)
     return REGISTER_FIO
 
 async def get_registration_fio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data['initiator_fio'] = update.message.text
-    await update.message.reply_text("✅ ФИО принято. Введите вашу **рабочую почту**.", parse_mode=ParseMode.HTML)
+    await update.message.reply_text("✅ ФИО принято.\n\n📧 Введите вашу <b>рабочую почту</b>.", parse_mode=ParseMode.HTML)
     return REGISTER_EMAIL
 
 async def get_registration_email(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -196,16 +199,14 @@ async def get_registration_email(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text("❌ Формат почты неверный. Попробуйте еще раз.")
         return REGISTER_EMAIL
     context.user_data['initiator_email'] = email
-    await update.message.reply_text("✅ Почта принята. Введите вашу **должность**.", parse_mode=ParseMode.HTML)
+    await update.message.reply_text("✅ Почта принята.\n\n🏢 Введите вашу <b>должность</b>.", parse_mode=ParseMode.HTML)
     return REGISTER_JOB_TITLE
 
 async def get_registration_job_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """ИСПРАВЛЕНО: Завершает регистрацию и возвращает в главное меню."""
     context.user_data['initiator_job_title'] = update.message.text
     context.user_data['initiator_registered'] = True
-    
-    await update.message.reply_text("🎉 **Регистрация успешно завершена!**", parse_mode=ParseMode.HTML)
-    await show_main_menu(update, context) # Возвращаем в главное меню
+    await update.message.reply_text("🎉 <b>Регистрация успешно завершена!</b>", parse_mode=ParseMode.HTML)
+    await show_main_menu(update, context)
     return ConversationHandler.END
 
 # ... (Остальные шаги анкеты)
@@ -318,12 +319,10 @@ def main() -> None:
     form_conv = ConversationHandler(
         entry_points=[MessageHandler(form_filter, start_form_conversation)],
         states={
-            # Регистрация
             REGISTER_CONTACT: [MessageHandler(filters.CONTACT, handle_contact_registration)],
             REGISTER_FIO: [MessageHandler(state_text_filter, get_registration_fio)],
             REGISTER_EMAIL: [MessageHandler(state_text_filter, get_registration_email)],
             REGISTER_JOB_TITLE: [MessageHandler(state_text_filter, get_registration_job_title)],
-            # Анкета
             OWNER_LAST_NAME: [MessageHandler(state_text_filter, get_owner_last_name)], 
             OWNER_FIRST_NAME: [MessageHandler(state_text_filter, get_owner_first_name)],
             REASON: [MessageHandler(state_text_filter, get_reason)], 
