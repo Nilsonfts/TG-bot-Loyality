@@ -101,7 +101,8 @@ async def delete_messages(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
             await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
         except Exception as e:
             logger.warning(f"Не удалось удалить сообщение {msg_id}: {e}")
-    context.user_data['messages_to_delete'] = []
+    if 'messages_to_delete' in context.user_data:
+        del context.user_data['messages_to_delete']
 
 # --- ГЛАВНОЕ МЕНЮ И СИСТЕМА НАВИГАЦИИ ---
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -191,6 +192,8 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 async def start_form_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     chat = update.effective_chat
     context.user_data['messages_to_delete'] = []
+    add_message_to_delete(context, update.message.message_id)
+
     initiator_data = context.user_data.get('initiator_fio') and {"fio": context.user_data.get('initiator_fio'), "email": context.user_data.get('initiator_email'), "job_title": context.user_data.get('initiator_job_title')}
     if initiator_data:
         text = (f"Начинаем новую заявку. Используем сохраненные данные:\n\n"
@@ -216,7 +219,7 @@ async def handle_reuse_choice(update: Update, context: ContextTypes.DEFAULT_TYPE
         msg = await query.message.reply_text("Данные инициатора заполнены.\n\nВведите <b>Фамилию</b> владельца карты.", parse_mode=ParseMode.HTML)
         add_message_to_delete(context, msg.message_id)
         return OWNER_LAST_NAME
-    else: # enter_new_data
+    else:
         msg = await query.message.reply_text("Хорошо, введите данные заново.\n\nВаша рабочая почта?")
         add_message_to_delete(context, msg.message_id)
         return EMAIL
@@ -229,7 +232,6 @@ async def get_email(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     add_message_to_delete(context, msg.message_id)
     return FIO_INITIATOR
 
-# ... (и так далее для всех функций get_... )
 async def get_fio_initiator(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     add_message_to_delete(context, update.message.message_id)
     context.user_data['fio_initiator'] = update.message.text
@@ -348,16 +350,20 @@ async def get_comment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 async def submit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
+    
+    # Сначала удаляем все промежуточные сообщения
     await delete_messages(context, update.effective_chat.id)
+    
     user_id = str(query.from_user.id)
-    # Добавляем небольшую паузу для Google Sheets
-    await asyncio.sleep(2)
+    await asyncio.sleep(2) # Пауза для Google Sheets
     success = write_to_sheet(context.user_data, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), user_id)
-    final_text = "✅ Готово! Заявка успешно записана." if success else "❌ Ошибка при записи в таблицу."
-    # Вместо редактирования, отправляем новую итоговую карточку
+    
+    # Отправляем новую итоговую карточку вместо редактирования
     final_summary = format_summary(context.user_data)
-    final_summary += f"\n\n<b>Статус:</b> { '✅ Успешно' if success else '❌ Ошибка' }"
-    await context.bot.send_message(update.effective_chat.id, text=final_summary, parse_mode=ParseMode.HTML)
+    status_text = "✅ Заявка успешно записана." if success else "❌ Ошибка при записи в таблицу."
+    final_summary_with_status = final_summary + f"\n\n<b>Статус:</b> {status_text}"
+    
+    await context.bot.send_message(update.effective_chat.id, text=final_summary_with_status, parse_mode=ParseMode.HTML)
     await show_main_menu(update, context)
     context.user_data.clear()
     return ConversationHandler.END
@@ -365,12 +371,11 @@ async def submit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 async def restart_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
-    await delete_messages(context, update.effective_chat.id)
+    await delete_messages(context, update.effective_chat.id) # Очищаем чат перед рестартом
     return await start_form_conversation(update, context)
 
 # --- Функции отмены и прерывания диалогов ---
 async def fallback_interrupt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Спрашивает подтверждение на отмену текущего действия."""
     command_text = update.message.text.lstrip('✍️🗂️🔍❓ ').strip()
     context.user_data['interrupt_command'] = command_text
     keyboard = [[
@@ -378,49 +383,64 @@ async def fallback_interrupt(update: Update, context: ContextTypes.DEFAULT_TYPE)
         InlineKeyboardButton("Нет, продолжить", callback_data="interrupt_no")
     ]]
     msg = await update.message.reply_text(f"Вы не закончили подачу заявки. Прервать и перейти в «{command_text}»?", reply_markup=InlineKeyboardMarkup(keyboard))
-    add_message_to_delete(context, msg.message_id)
+    add_message_to_delete(context, msg.message_id) # Этот вопрос тоже нужно будет удалить
+    add_message_to_delete(context, update.message.message_id)
     return INTERRUPT_CONFIRMATION
 
 async def handle_interrupt_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обрабатывает ответ на подтверждение прерывания."""
     query = update.callback_query
     await query.answer()
-    await query.message.delete() # Удаляем сообщение с вопросом
-
+    command_to_run = context.user_data.pop('interrupt_command', None)
+    
     if query.data == "interrupt_yes":
-        command = context.user_data.pop('interrupt_command', None)
-        await delete_messages(context, update.effective_chat.id) # Очищаем старые сообщения анкеты
+        await query.message.delete()
+        await delete_messages(context, update.effective_chat.id)
         
-        if command == "Подать заявку":
-            return await start_form_conversation(update, context)
-        elif command == "Мои Карты":
+        if command_to_run == "Подать заявку":
+            await start_form_conversation(update, context)
+        elif command_to_run == "Мои Карты":
             await my_cards_command(update, context)
-        elif command == "Поиск":
-            return await search_command(update, context)
-        elif command == "Помощь":
+        elif command_to_run == "Поиск":
+            await search_command(update, context)
+        elif command_to_run == "Помощь":
             await show_help(update, context)
         return ConversationHandler.END
     else: # interrupt_no
-        # Просто остаемся в том же состоянии, пользователь может продолжать ввод
-        current_state = context.user_data.get(ConversationHandler.STATE)
-        await query.message.reply_text("Хорошо, продолжаем. Жду ваш ответ.")
-        return current_state
+        await query.message.delete()
+        # Возвращаем пользователя к вводу, не меняя состояние
+        return ConversationHandler.WAITING
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.message.reply_text("Действие отменено.")
+async def cancel_and_show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.message.reply_text("Текущее действие отменено.")
     await show_main_menu(update, context)
+    context.user_data.clear()
     return ConversationHandler.END
+
 
 # --- ОСНОВНАЯ ФУНКЦИЯ ЗАПУСКА БОТА ---
 def main() -> None:
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    
+
     form_filter = filters.Regex("^(✍️ )?Подать заявку$")
     cards_filter = filters.Regex("^(🗂️ )?Мои Карты$")
     search_filter = filters.Regex("^(🔍 )?Поиск$")
     help_filter = filters.Regex("^(❓ )?Помощь$")
-    menu_filters = form_filter | cards_filter | search_filter | help_filter
-    state_text_filter = filters.TEXT & ~filters.COMMAND & ~menu_filters
+    
+    # Фильтры для состояний, которые не должны реагировать на кнопки меню
+    state_text_filter = filters.TEXT & ~filters.COMMAND & ~form_filter & ~cards_filter & ~search_filter & ~help_filter
+    
+    # Фолбэки для диалога подачи заявки
+    form_fallbacks = [
+        MessageHandler(cards_filter | search_filter | help_filter, fallback_interrupt),
+        CommandHandler("start", cancel_and_show_menu),
+        CommandHandler("cancel", cancel_and_show_menu)
+    ]
+    # Фолбэки для диалога поиска
+    search_fallbacks = [
+        MessageHandler(form_filter | cards_filter | help_filter, fallback_interrupt),
+        CommandHandler("start", cancel_and_show_menu),
+        CommandHandler("cancel", cancel_and_show_menu)
+    ]
 
     form_conv = ConversationHandler(
         entry_points=[MessageHandler(form_filter, start_form_conversation)],
@@ -433,15 +453,15 @@ def main() -> None:
             AMOUNT: [MessageHandler(state_text_filter, get_amount)], FREQUENCY: [CallbackQueryHandler(get_frequency)],
             COMMENT: [MessageHandler(state_text_filter, get_comment)],
             CONFIRMATION: [CallbackQueryHandler(submit, pattern="^submit$"), CallbackQueryHandler(restart_conversation, pattern="^restart$")],
-            INTERRUPT_CONFIRMATION: [CallbackQueryHandler(handle_interrupt_confirmation)],
+            INTERRUPT_CONFIRMATION: [CallbackQueryHandler(handle_interrupt_confirmation)]
         },
-        fallbacks=[MessageHandler(menu_filters, fallback_interrupt), CommandHandler("start", cancel)],
+        fallbacks=form_fallbacks,
     )
 
     search_conv = ConversationHandler(
         entry_points=[MessageHandler(search_filter, search_command)],
         states={ AWAIT_SEARCH_QUERY: [MessageHandler(state_text_filter, perform_search)] },
-        fallbacks=[MessageHandler(menu_filters & ~search_filter, fallback_interrupt), CommandHandler("start", cancel)],
+        fallbacks=search_fallbacks,
     )
 
     application.add_handler(CommandHandler("start", show_main_menu))
