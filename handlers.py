@@ -97,19 +97,32 @@ async def get_registration_email(update: Update, context: ContextTypes.DEFAULT_T
     return REGISTER_JOB_TITLE
 
 async def finish_registration(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Finishes registration, saves data, and shows the main menu."""
+    """
+    Finishes registration, saves data, and shows the main menu.
+    This function was modified to avoid the G-Sheets API race condition.
+    """
     context.user_data['initiator_job_title'] = update.message.text
     success = g_sheets.write_to_sheet(
         data=context.user_data,
         submission_time=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         tg_user_id=str(update.effective_user.id)
     )
-    if success:
-        await update.message.reply_text("🎉 <b>Регистрация успешно завершена!</b>", parse_mode=ParseMode.HTML)
-    else:
-        await update.message.reply_text("❌ Произошла ошибка при сохранении регистрации. Пожалуйста, попробуйте снова или свяжитесь с администратором.")
     context.user_data.clear()
-    await main_menu_command(update, context)
+
+    if success:
+        # On success, we KNOW the user is registered. We don't need to check again.
+        # We immediately show the full keyboard to avoid the API delay issue.
+        await update.message.reply_text("🎉 <b>Регистрация успешно завершена!</b>", parse_mode=ParseMode.HTML, reply_markup=ReplyKeyboardRemove())
+        
+        full_keyboard = keyboards.get_main_menu_keyboard(is_registered=True)
+        await update.message.reply_text("Теперь вам доступны все функции бота.", reply_markup=full_keyboard)
+    else:
+        # On failure, show the registration menu again.
+        await update.message.reply_text(
+            "❌ Ошибка при сохранении регистрации. Пожалуйста, попробуйте снова.",
+            reply_markup=keyboards.get_main_menu_keyboard(is_registered=False)
+        )
+
     return ConversationHandler.END
 
 
