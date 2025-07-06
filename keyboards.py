@@ -3,8 +3,9 @@
 """
 This file contains functions for generating keyboards for the bot.
 """
-
-from telegram import ReplyKeyboardMarkup, InlineKeyboardMarkup, KeyboardButton
+# --- ИЗМЕНЕНИЕ ---
+# Добавили недостающий импорт InlineKeyboardButton
+from telegram import ReplyKeyboardMarkup, InlineKeyboardMarkup, KeyboardButton, InlineKeyboardButton
 from constants import (
     MENU_TEXT_REGISTER, MENU_TEXT_SUBMIT, MENU_TEXT_SEARCH,
     MENU_TEXT_SETTINGS, MENU_TEXT_MAIN_MENU
@@ -25,7 +26,6 @@ def get_main_menu_keyboard(is_registered: bool) -> ReplyKeyboardMarkup:
         keyboard = [[MENU_TEXT_REGISTER]]
         return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
 
-# Остальные функции get_settings_keyboard и get_back_to_settings_keyboard остаются без изменений
 def get_settings_keyboard(is_boss: bool) -> InlineKeyboardMarkup:
     """Returns the settings inline keyboard."""
     cards_button_text = "🗂️ Все заявки" if is_boss else "🗂️ Мои Заявки"
@@ -39,5 +39,6 @@ def get_settings_keyboard(is_boss: bool) -> InlineKeyboardMarkup:
 
 def get_back_to_settings_keyboard() -> InlineKeyboardMarkup:
     """Returns a keyboard with a single 'Back to settings' button."""
+    # Теперь эта строка будет работать, так как InlineKeyboardButton импортирован
     keyboard = [[InlineKeyboardButton("⬅️ Назад в настройки", callback_data="back_to_settings")]]
     return InlineKeyboardMarkup(keyboard)
