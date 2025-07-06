@@ -2,7 +2,6 @@
 import logging
 import os
 from datetime import datetime, timedelta
-from collections import Counter
 from telegram.ext import ContextTypes
 from telegram.constants import ParseMode
 
@@ -30,13 +29,12 @@ async def send_daily_summary(context: ContextTypes.DEFAULT_TYPE) -> None:
     
     for card in all_cards:
         try:
-            # Приводим строку времени к объекту datetime
             timestamp_str = card.get(SheetCols.TIMESTAMP)
             card_time = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
             if card_time > yesterday:
                 recent_cards.append(card)
         except (TypeError, ValueError):
-            continue # Пропускаем строки с неверным форматом даты
+            continue 
             
     pending_count = sum(1 for card in all_cards if card.get(SheetCols.STATUS_COL) == 'На согласовании')
     new_in_24h = len(recent_cards)
