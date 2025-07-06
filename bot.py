@@ -60,7 +60,8 @@ def main() -> None:
             constants.AWAIT_REJECT_REASON: [MessageHandler(text_filter, admin_handlers.reject_request_reason)],
         },
         fallbacks=[cancel_handler],
-        conversation_timeout=300 # 5 минут на ввод причины
+        conversation_timeout=300,
+        per_message=True  # <-- ДОБАВЛЕНО для исправления предупреждения
     )
 
     # --- Диалог подачи заявки ---
@@ -81,7 +82,7 @@ def main() -> None:
             constants.FREQUENCY: [CallbackQueryHandler(form_handlers.get_frequency)],
             constants.ISSUE_LOCATION: [
                 CallbackQueryHandler(form_handlers.get_issue_location_from_button),
-                MessageHandler(text_filter, form_handlers.get_issue_location_from_text) # Запасной вариант
+                MessageHandler(text_filter, form_handlers.get_issue_location_from_text)
             ],
             constants.CONFIRMATION: [
                 CallbackQueryHandler(form_handlers.submit, "^submit$"),
@@ -89,6 +90,7 @@ def main() -> None:
             ],
         },
         fallbacks=[fallback_handler, cancel_handler],
+        per_message=True # <-- ДОБАВЛЕНО для исправления предупреждения
     )
 
     # --- Диалог поиска ---
@@ -99,6 +101,7 @@ def main() -> None:
             constants.AWAIT_SEARCH_QUERY: [MessageHandler(text_filter, search_handlers.perform_search)]
         },
         fallbacks=[fallback_handler, cancel_handler],
+        per_message=True # <-- ДОБАВЛЕНО для исправления предупреждения
     )
 
     # --- Добавляем все обработчики ---
@@ -124,8 +127,11 @@ def main() -> None:
     # --- Планировщик отчетов ---
     if BOSS_ID:
         job_queue = application.job_queue
-        job_queue.run_daily(reports.send_daily_summary, time=datetime.time(hour=9, minute=0, tzinfo=datetime.timezone(datetime.timedelta(hours=3)))) # МСК = UTC+3
-        logger.info("Scheduled daily reports for the boss.")
+        # Устанавливаем часовой пояс, например, МСК (UTC+3)
+        tz = datetime.timezone(datetime.timedelta(hours=3))
+        # Запускать каждый день в 09:00 по указанному часовому поясу
+        job_queue.run_daily(reports.send_daily_summary, time=datetime.time(hour=9, minute=0, tzinfo=tz))
+        logger.info(f"Scheduled daily reports for the boss at 09:00 in {tz}.")
 
     # --- Запускаем бота ---
     logger.info("Бот запускается с системой согласования и отчетами...")
