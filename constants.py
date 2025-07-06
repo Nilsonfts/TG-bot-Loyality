@@ -36,3 +36,25 @@ CARDS_PER_PAGE = 7
     SEARCH_CHOOSE_FIELD,
     AWAIT_SEARCH_QUERY,
 ) = range(16)
+
+
+# --- Google Sheet Column Names ---
+# Используем переменные, чтобы избежать опечаток и упростить рефакторинг
+class SheetCols:
+    TIMESTAMP = 'Отметка времени'
+    TG_ID = 'ТГ Заполняющего'
+    TG_TAG = 'Тег Telegram'
+    EMAIL = 'Адрес электронной почты'
+    FIO_INITIATOR = 'ФИО Инициатора'
+    JOB_TITLE = 'Должность'
+    PHONE_INITIATOR = 'Телефон инициатора'
+    OWNER_LAST_NAME_COL = 'Фамилия Владельца'
+    OWNER_FIRST_NAME_COL = 'Имя владельца карты'
+    REASON_COL = 'Причина выдачи'
+    CARD_TYPE_COL = 'Какую карту регистрируем?'
+    CARD_NUMBER_COL = 'Номер карты'
+    CATEGORY_COL = 'Статья пополнения карт'
+    AMOUNT_COL = 'Сумма бартера или % скидки'
+    FREQUENCY_COL = 'Периодичность'
+    ISSUE_LOCATION_COL = 'Город/Бар выдачи'
+    STATUS_COL = 'Статус Согласования'
