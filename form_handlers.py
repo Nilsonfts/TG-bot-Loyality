@@ -1,25 +1,21 @@
 # -*- coding: utf-8 -*-
 
 import logging
-import re
-import os
 from datetime import datetime
+import re
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove, KeyboardButton, ReplyKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, ConversationHandler
 
 import g_sheets
 import navigation_handlers
-import admin_handlers
 from constants import (
-    SheetCols, REGISTER_CONTACT, REGISTER_FIO, REGISTER_EMAIL, REGISTER_JOB_TITLE,
     OWNER_LAST_NAME, OWNER_FIRST_NAME, REASON, CARD_TYPE, CARD_NUMBER, CATEGORY,
     AMOUNT, FREQUENCY, ISSUE_LOCATION, CONFIRMATION
 )
 
 logger = logging.getLogger(__name__)
-
 
 def format_summary(data: dict) -> str:
     """Форматирует итоговое сообщение перед отправкой."""
@@ -42,60 +38,21 @@ def format_summary(data: dict) -> str:
             "<i>Все верно?</i>")
 
 async def start_form_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Начинает диалог подачи заявки."""
+    """Начинает диалог подачи заявки для УЖЕ ЗАРЕГИСТРИРОВАННОГО пользователя."""
     context.user_data.clear()
     user_id = str(update.effective_user.id)
-    is_registered = g_sheets.is_user_registered(user_id)
 
-    if is_registered:
-        initiator_data = g_sheets.get_initiator_data(user_id)
-        if not initiator_data:
-            await update.message.reply_text("Ошибка: не удалось найти ваши данные.\nПожалуйста, перезапустите бота командой /start.")
-            return await navigation_handlers.end_conversation_and_show_menu(update, context)
+    # Получаем данные пользователя (он должен быть зарегистрирован, чтобы нажать эту кнопку)
+    initiator_data = g_sheets.get_initiator_data(user_id)
+    if not initiator_data:
+        await update.message.reply_text("Ошибка: не удалось найти ваши данные. Пожалуйста, пройдите регистрацию заново.")
+        return await navigation_handlers.end_conversation_and_show_menu(update, context)
 
-        context.user_data.update(initiator_data)
-        await update.message.reply_text(
-            f"Начинаем подачу новой заявки.\nВведите <b>Фамилию</b> владельца карты.",
-            parse_mode=ParseMode.HTML
-        )
-        return OWNER_LAST_NAME
-    else:
-        keyboard = [[KeyboardButton("📱 Поделиться контактом", request_contact=True)]]
-        await update.message.reply_text(
-            "Здравствуйте! Похоже, вы у нас впервые.\n"
-            "Для подачи заявки нужно сначала пройти быструю регистрацию.\n\n"
-            "Пожалуйста, поделитесь своим контактом.",
-            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
-        )
-        return REGISTER_CONTACT
-
-
-async def handle_contact_registration(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    contact, user = update.message.contact, update.effective_user
-    context.user_data['initiator_phone'] = contact.phone_number.replace('+', '')
-    context.user_data['initiator_username'] = f"@{user.username}" if user.username else "–"
-    await update.message.reply_text("✅ Контакт получен!\n\n👤 Введите ваше <b>полное ФИО</b>.", reply_markup=ReplyKeyboardRemove(), parse_mode=ParseMode.HTML)
-    return REGISTER_FIO
-
-async def get_registration_fio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data['initiator_fio'] = update.message.text
-    await update.message.reply_text("✅ ФИО принято.\n\n📧 Введите вашу <b>рабочую почту</b>.", parse_mode=ParseMode.HTML)
-    return REGISTER_EMAIL
-
-async def get_registration_email(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    email = update.message.text
-    if not re.match(r"[^@]+@[^@]+\.[^@]+", email):
-        await update.message.reply_text("❌ Формат почты неверный. Попробуйте еще раз.")
-        return REGISTER_EMAIL
-    context.user_data['initiator_email'] = email
-    await update.message.reply_text("✅ Почта принята.\n\n🏢 Введите вашу <b>должность</b>.", parse_mode=ParseMode.HTML)
-    return REGISTER_JOB_TITLE
-
-async def get_registration_job_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data['initiator_job_title'] = update.message.text
+    context.user_data.update(initiator_data)
     await update.message.reply_text(
-        "🎉 <b>Регистрация завершена!</b>\n\nТеперь продолжим с заявкой.\nВведите <b>Фамилию</b> владельца карты.",
-        parse_mode=ParseMode.HTML
+        "Начинаем подачу новой заявки.\nВведите <b>Фамилию</b> владельца карты.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=ReplyKeyboardRemove()
     )
     return OWNER_LAST_NAME
 
@@ -127,14 +84,6 @@ async def get_card_number(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if not (number.startswith('8') and number.isdigit() and len(number) == 11):
         await update.message.reply_text("Неверный формат. Нужно 11 цифр, начиная с 8.")
         return CARD_NUMBER
-    
-    existing_card = g_sheets.find_card_by_number(number)
-    if existing_card:
-        row_data = g_sheets.get_row_data(existing_card.row)
-        owner_name = f"{row_data.get(SheetCols.OWNER_FIRST_NAME_COL)} {row_data.get(SheetCols.OWNER_LAST_NAME_COL)}"
-        await update.message.reply_text(f"❌ Эта карта уже зарегистрирована на <b>{owner_name}</b>. Введите другой номер.", parse_mode=ParseMode.HTML)
-        return CARD_NUMBER
-        
     context.user_data['card_number'] = number
     keyboard = [[InlineKeyboardButton("АРТ", callback_data="АРТ"), InlineKeyboardButton("МАРКЕТ", callback_data="МАРКЕТ")], [InlineKeyboardButton("Операционный блок", callback_data="Операционный блок")], [InlineKeyboardButton("СКИДКА", callback_data="СКИДКА"), InlineKeyboardButton("Сертификат", callback_data="Сертификат")], [InlineKeyboardButton("Учредители", callback_data="Учредители")]]
     await update.message.reply_text("Статья пополнения?", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -161,32 +110,10 @@ async def get_frequency(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     query = update.callback_query
     await query.answer()
     context.user_data['frequency'] = query.data
-    
-    # Загружаем города из справочника
-    locations = g_sheets.get_config_options("ValidLocations")
-    if not locations:
-        await query.edit_message_text(f"Выбрано: {query.data}.\n\n<b>Город/Бар выдачи?</b>\n(Не удалось загрузить справочник, введите вручную)", parse_mode=ParseMode.HTML)
-        return ISSUE_LOCATION
-        
-    keyboard = [
-        [InlineKeyboardButton(loc, callback_data=loc)] for loc in locations
-    ]
-    await query.edit_message_text(f"Выбрано: {query.data}.\n\n<b>Выберите город/бар выдачи:</b>", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
+    await query.edit_message_text(f"Выбрано: {query.data}.\n\n<b>Город_БАР выдачи?</b>", parse_mode=ParseMode.HTML)
     return ISSUE_LOCATION
 
-
-async def get_issue_location_from_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обрабатывает выбор города из кнопки."""
-    query = update.callback_query
-    await query.answer()
-    context.user_data['issue_location'] = query.data
-    summary = format_summary(context.user_data)
-    keyboard = [[InlineKeyboardButton("✅ Да, все верно", callback_data="submit"), InlineKeyboardButton("❌ Нет, заполнить заново", callback_data="restart")]]
-    await query.edit_message_text(summary, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
-    return CONFIRMATION
-
-async def get_issue_location_from_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обрабатывает ввод города текстом (запасной вариант)."""
+async def get_issue_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data['issue_location'] = update.message.text
     summary = format_summary(context.user_data)
     keyboard = [[InlineKeyboardButton("✅ Да, все верно", callback_data="submit"), InlineKeyboardButton("❌ Нет, заполнить заново", callback_data="restart")]]
@@ -194,43 +121,29 @@ async def get_issue_location_from_text(update: Update, context: ContextTypes.DEF
     return CONFIRMATION
 
 async def submit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Финализирует и отправляет заявку, уведомляет админа."""
+    """Финализирует и отправляет единую заявку в Google Sheets."""
     query = update.callback_query
-    await query.answer(text="Отправляю заявку на согласование...", show_alert=False)
+    await query.answer(text="Отправляю заявку...", show_alert=False)
     
     user_id = str(query.from_user.id)
-    context.user_data['status'] = 'На согласовании'
+    context.user_data['status'] = 'Заявка'
     
-    row_index = g_sheets.write_to_sheet(
+    success = g_sheets.write_to_sheet(
         data=context.user_data,
         submission_time=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         tg_user_id=user_id
     )
 
-    if row_index:
-        await query.edit_message_text(
-            text=query.message.text_html + "\n\n<b>Статус:</b> ✅ Заявка успешно отправлена на согласование.",
-            parse_mode=ParseMode.HTML, reply_markup=None
-        )
-        
-        boss_id = os.getenv("BOSS_ID")
-        if boss_id:
-            row_data = g_sheets.get_row_data(row_index)
-            if row_data:
-                notification = admin_handlers.format_admin_notification(row_data, row_index)
-                await context.bot.send_message(chat_id=boss_id, **notification)
-    else:
-        await query.edit_message_text(
-             text=query.message.text_html + "\n\n<b>Статус:</b> ❌ Ошибка! Не удалось сохранить заявку.",
-             parse_mode=ParseMode.HTML, reply_markup=None
-        )
-
+    status_text = "\n\n<b>Статус:</b> ✅ Заявка успешно отправлена." if success else "\n\n<b>Статус:</b> ❌ Ошибка! Не удалось сохранить заявку."
+    await query.edit_message_text(text=query.message.text_html + status_text, parse_mode=ParseMode.HTML, reply_markup=None)
+    
     context.user_data.clear()
     await navigation_handlers.main_menu_command(update, context)
+
     return ConversationHandler.END
 
 async def restart_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Перезапускает диалог подачи заявки."""
+    """Перезапускает диалог подачи заявки с самого начала."""
     query = update.callback_query
     await query.answer()
     await query.message.delete()
