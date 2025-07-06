@@ -14,9 +14,9 @@ from telegram.ext import (
 )
 
 import constants
-# --- НОВЫЕ ИМПОРТЫ ОБРАБОТЧИКОВ ---
+# --- ОБНОВЛЕННЫЕ ИМПОРТЫ ---
 import navigation_handlers
-import registration_handlers
+# registration_handlers больше не нужен
 import form_handlers
 import search_handlers
 import settings_handlers
@@ -40,7 +40,7 @@ def main() -> None:
 
     # --- Фильтры для кнопок меню ---
     filters_map = {
-        'reg': filters.Regex(f"^{constants.MENU_TEXT_REGISTER}$"),
+        # 'reg' фильтр больше не нужен
         'submit': filters.Regex(f"^{constants.MENU_TEXT_SUBMIT}$"),
         'search': filters.Regex(f"^{constants.MENU_TEXT_SEARCH}$"),
         'settings': filters.Regex(f"^{constants.MENU_TEXT_SETTINGS}$"),
@@ -48,32 +48,25 @@ def main() -> None:
     }
 
     combined_menu_filter = (
-        filters_map['reg'] | filters_map['submit'] | filters_map['search'] |
+        filters_map['submit'] | filters_map['search'] |
         filters_map['settings'] | filters_map['main']
     )
-    # Фильтр для текста, который не является ни командой, ни кнопкой меню.
     text_filter = filters.TEXT & ~filters.COMMAND & ~combined_menu_filter
 
-    # --- Обработчики отмены и возврата в меню (ИСПРАВЛЕНО) ---
-    # Этот обработчик теперь корректно завершает любой диалог
+    # --- Обработчики отмены и возврата в меню ---
     fallback_handler = MessageHandler(filters_map['main'], navigation_handlers.end_conversation_and_show_menu)
     cancel_handler = CommandHandler("cancel", navigation_handlers.cancel)
 
-    # --- Обработчики диалогов (Conversation Handlers) ---
-    reg_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters_map['reg'], registration_handlers.start_registration)],
-        states={
-            constants.REGISTER_CONTACT: [MessageHandler(filters.CONTACT, registration_handlers.handle_contact_registration)],
-            constants.REGISTER_FIO: [MessageHandler(text_filter, registration_handlers.get_registration_fio)],
-            constants.REGISTER_EMAIL: [MessageHandler(text_filter, registration_handlers.get_registration_email)],
-            constants.REGISTER_JOB_TITLE: [MessageHandler(text_filter, registration_handlers.finish_registration)],
-        },
-        fallbacks=[fallback_handler, cancel_handler],
-    )
-
+    # --- ЕДИНЫЙ ОБРАБОТЧИК ДЛЯ ФОРМЫ И РЕГИСТРАЦИИ ---
     form_conv = ConversationHandler(
         entry_points=[MessageHandler(filters_map['submit'], form_handlers.start_form_conversation)],
         states={
+            # Новые состояния для регистрации внутри этого диалога
+            constants.REGISTER_CONTACT: [MessageHandler(filters.CONTACT, form_handlers.handle_contact_registration)],
+            constants.REGISTER_FIO: [MessageHandler(text_filter, form_handlers.get_registration_fio)],
+            constants.REGISTER_EMAIL: [MessageHandler(text_filter, form_handlers.get_registration_email)],
+            constants.REGISTER_JOB_TITLE: [MessageHandler(text_filter, form_handlers.get_registration_job_title)],
+            # Старые состояния для заявки
             constants.OWNER_LAST_NAME: [MessageHandler(text_filter, form_handlers.get_owner_last_name)],
             constants.OWNER_FIRST_NAME: [MessageHandler(text_filter, form_handlers.get_owner_first_name)],
             constants.REASON: [MessageHandler(text_filter, form_handlers.get_reason)],
@@ -105,7 +98,7 @@ def main() -> None:
     application.add_handler(MessageHandler(filters_map['main'], navigation_handlers.main_menu_command))
     application.add_handler(MessageHandler(filters_map['settings'], settings_handlers.show_settings))
 
-    application.add_handler(reg_conv)
+    # Убираем reg_conv, оставляем только form_conv и search_conv
     application.add_handler(form_conv)
     application.add_handler(search_conv)
 
@@ -119,7 +112,7 @@ def main() -> None:
     application.add_handler(CallbackQueryHandler(settings_handlers.noop_callback, r"^noop$"))
 
     # --- Запускаем бота ---
-    logger.info("Бот запускается в модульной структуре (v5)...")
+    logger.info("Бот запускается в модульной структуре (v6)...")
     application.run_polling()
 
 
