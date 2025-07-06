@@ -1,23 +1,17 @@
 # -*- coding: utf-8 -*-
 
-"""
-This file contains all the logic for interacting with Google Sheets API,
-including a local cache and enhanced debugging for write operations.
-It uses GID for worksheet identification to be robust against renames.
-"""
-
 import os
 import json
 import logging
+import re
 import datetime
 import gspread
 from google.oauth2.service_account import Credentials
-from constants import SheetCols # Импортируем константы
+from constants import SheetCols
 
 # --- Environment Variables & Constants ---
 GOOGLE_CREDS_JSON = os.getenv("GOOGLE_CREDS_JSON")
 GOOGLE_SHEET_KEY = os.getenv("GOOGLE_SHEET_KEY")
-# Делаем GID настраиваемым через переменные окружения
 SHEET_GID = int(os.getenv("SHEET_GID", 0))
 
 logger = logging.getLogger(__name__)
@@ -26,30 +20,6 @@ logger = logging.getLogger(__name__)
 INITIATOR_DATA_CACHE = {}
 REGISTRATION_STATUS_CACHE = {}
 CACHE_EXPIRATION_SECONDS = 300  # 5 minutes
-
-def cache_user_registration_status(user_id: str, status: bool):
-    """Кэширует статус регистрации пользователя (True или False)."""
-    REGISTRATION_STATUS_CACHE[user_id] = {
-        'status': status,
-        'timestamp': datetime.datetime.now()
-    }
-    logger.info(f"User {user_id} registration status cached as {status}.")
-
-def get_initiator_data(user_id: str):
-    """
-    Находит данные инициатора, проверяя локальный кэш первым, затем Google Sheets.
-    """
-    if user_id in INITIATOR_DATA_CACHE:
-        cached_entry = INITIATOR_DATA_CACHE[user_id]
-        if (datetime.datetime.now() - cached_entry['timestamp']).total_seconds() < CACHE_EXPIRATION_SECONDS:
-            logger.info(f"Found user {user_id} data in local cache.")
-            return cached_entry['data']
-        else:
-            del INITIATOR_DATA_CACHE[user_id]
-            logger.info(f"Removed expired cache for user {user_id}.")
-
-    logger.info(f"User {user_id} not in cache, fetching from Google Sheet.")
-    return find_initiator_in_sheet_from_api(user_id)
 
 def get_gspread_client():
     """Аутентифицирует и возвращает gspread клиент."""
@@ -82,10 +52,8 @@ def get_sheet_data():
     """Получает все записи из указанного рабочего листа по GID."""
     client = get_gspread_client()
     if not client: return []
-    
     sheet = get_sheet_by_gid(client)
     if not sheet: return []
-    
     try:
         return sheet.get_all_records()
     except Exception as e:
@@ -93,38 +61,34 @@ def get_sheet_data():
         return []
 
 def is_user_registered(user_id: str) -> bool:
-    """
-    Проверяет, есть ли у пользователя завершенная запись в таблице.
-    Сначала проверяет кэш. Кэширует и положительный, и отрицательный результат.
-    """
+    """Проверяет, есть ли у пользователя завершенная запись в таблице."""
     if user_id in REGISTRATION_STATUS_CACHE:
         cached_entry = REGISTRATION_STATUS_CACHE[user_id]
-        # Кэш на 1 час для зарегистрированных, на 5 минут для незарегистрированных
-        expiration = 3600 if cached_entry['status'] else 300
-        if (datetime.datetime.now() - cached_entry['timestamp']).total_seconds() < expiration:
-            logger.info(f"User {user_id} found in REGISTRATION_STATUS_CACHE with status: {cached_entry['status']}.")
-            return cached_entry['status']
+        if (datetime.datetime.now() - cached_entry['timestamp']).total_seconds() < 3600:
+            return True
         else:
             del REGISTRATION_STATUS_CACHE[user_id]
 
-    logger.info(f"User {user_id} not in status cache or cache expired, checking sheet.")
+    logger.info(f"User {user_id} not in status cache, checking sheet.")
     all_records = get_sheet_data()
     for row in all_records:
-        # Используем константы для надежности
         if str(row.get(SheetCols.TG_ID)) == user_id and row.get(SheetCols.FIO_INITIATOR):
-            cache_user_registration_status(user_id, True)
+            REGISTRATION_STATUS_CACHE[user_id] = {'timestamp': datetime.datetime.now()}
             return True
-
-    # Если цикл завершился и пользователь не найден, кэшируем отрицательный результат
-    cache_user_registration_status(user_id, False)
     return False
 
-def find_initiator_in_sheet_from_api(user_id: str):
-    """Находит самые свежие данные для пользователя прямо из таблицы."""
+def get_initiator_data(user_id: str):
+    """Находит данные инициатора, проверяя кэш, затем Google Sheets."""
+    if user_id in INITIATOR_DATA_CACHE:
+        cached_entry = INITIATOR_DATA_CACHE[user_id]
+        if (datetime.datetime.now() - cached_entry['timestamp']).total_seconds() < CACHE_EXPIRATION_SECONDS:
+            return cached_entry['data']
+        else:
+            del INITIATOR_DATA_CACHE[user_id]
+
     all_records = get_sheet_data()
     user_data = None
     for row in reversed(all_records):
-        # Используем константы
         if str(row.get(SheetCols.TG_ID)) == user_id and row.get(SheetCols.FIO_INITIATOR):
             user_data = {
                 "initiator_username": row.get(SheetCols.TG_TAG),
@@ -134,19 +98,13 @@ def find_initiator_in_sheet_from_api(user_id: str):
                 "initiator_phone": row.get(SheetCols.PHONE_INITIATOR),
             }
             break 
-    
     if user_data:
-        INITIATOR_DATA_CACHE[user_id] = {
-            'data': user_data.copy(),
-            'timestamp': datetime.datetime.now()
-        }
-    
+        INITIATOR_DATA_CACHE[user_id] = {'data': user_data.copy(), 'timestamp': datetime.datetime.now()}
     return user_data
 
 def get_cards_from_sheet(user_id: str = None) -> list:
-    """Получает заявки на карты, отфильтровывая строки только с регистрацией."""
+    """Получает заявки на карты."""
     all_records = get_sheet_data()
-    # Валидной записью теперь считается та, где есть Фамилия Владельца
     valid_records = [r for r in all_records if r.get(SheetCols.OWNER_LAST_NAME_COL)]
     if user_id:
         user_cards = [r for r in valid_records if str(r.get(SheetCols.TG_ID)) == user_id]
@@ -154,20 +112,79 @@ def get_cards_from_sheet(user_id: str = None) -> list:
         user_cards = valid_records
     return list(reversed(user_cards))
 
-def write_to_sheet(data: dict, submission_time: str, tg_user_id: str) -> bool:
-    """Записывает одну строку со всеми данными в таблицу, устойчиво к порядку столбцов."""
+def find_card_by_number(card_number: str) -> gspread.cell.Cell | None:
+    """Ищет карту по номеру телефона."""
     client = get_gspread_client()
-    if not client: return False
-    
+    if not client: return None
     sheet = get_sheet_by_gid(client)
-    if not sheet: return False
-
+    if not sheet: return None
     try:
         headers = sheet.row_values(1)
-        if not headers:
-            logger.error(f"Could not retrieve headers from sheet with GID {SHEET_GID}.")
-            return False
+        card_number_col_index = headers.index(SheetCols.CARD_NUMBER_COL) + 1
+        cell = sheet.find(card_number, in_column=card_number_col_index)
+        return cell
+    except gspread.exceptions.CellNotFound:
+        return None
+    except (ValueError, Exception) as e:
+        logger.error(f"Error finding card by number {card_number}: {e}")
+        return None
 
+def get_config_options(column_name: str) -> list[str]:
+    """Получает список опций из справочника на листе 'Config'."""
+    client = get_gspread_client()
+    if not client: return []
+    try:
+        spreadsheet = client.open_by_key(GOOGLE_SHEET_KEY)
+        config_sheet = spreadsheet.worksheet("Config")
+        headers = config_sheet.row_values(1)
+        if column_name not in headers:
+            logger.warning(f"Column '{column_name}' not found in 'Config' sheet.")
+            return []
+        col_index = headers.index(column_name) + 1
+        options = config_sheet.col_values(col_index)[1:]
+        return [opt for opt in options if opt]
+    except Exception as e:
+        logger.error(f"Could not get config options for '{column_name}': {e}")
+        return []
+
+def update_cell_by_row(row_index: int, col_name: str, value: str) -> bool:
+    """Обновляет одну ячейку в указанной строке."""
+    client = get_gspread_client()
+    if not client: return False
+    sheet = get_sheet_by_gid(client)
+    if not sheet: return False
+    try:
+        headers = sheet.row_values(1)
+        col_index = headers.index(col_name) + 1
+        sheet.update_cell(row_index, col_index, value)
+        logger.info(f"Updated cell at row {row_index}, col '{col_name}' with value '{value}'.")
+        return True
+    except (ValueError, Exception) as e:
+        logger.error(f"Failed to update cell at row {row_index}, col '{col_name}': {e}")
+        return False
+
+def get_row_data(row_index: int) -> dict | None:
+    """Получает все данные из указанной строки."""
+    client = get_gspread_client()
+    if not client: return None
+    sheet = get_sheet_by_gid(client)
+    if not sheet: return None
+    try:
+        headers = sheet.row_values(1)
+        values = sheet.row_values(row_index)
+        return dict(zip(headers, values))
+    except Exception as e:
+        logger.error(f"Failed to get data for row {row_index}: {e}")
+        return None
+
+def write_to_sheet(data: dict, submission_time: str, tg_user_id: str) -> int | None:
+    """Записывает одну строку и возвращает ИНДЕКС новой строки или None."""
+    client = get_gspread_client()
+    if not client: return None
+    sheet = get_sheet_by_gid(client)
+    if not sheet: return None
+    try:
+        headers = sheet.row_values(1)
         row_data = {
             SheetCols.TIMESTAMP: submission_time,
             SheetCols.TG_ID: tg_user_id,
@@ -185,25 +202,20 @@ def write_to_sheet(data: dict, submission_time: str, tg_user_id: str) -> bool:
             SheetCols.AMOUNT_COL: data.get('amount', ''),
             SheetCols.FREQUENCY_COL: data.get('frequency', ''),
             SheetCols.ISSUE_LOCATION_COL: data.get('issue_location', ''),
-            SheetCols.STATUS_COL: data.get('status', 'Заявка')
+            SheetCols.STATUS_COL: data.get('status', 'На согласовании')
         }
-
         final_row = [row_data.get(header, '') for header in headers]
-        
-        logger.info(f"Attempting to write row for user {tg_user_id}")
 
         api_response = sheet.append_row(final_row, value_input_option='USER_ENTERED')
-        logger.info(f"Google Sheets API response: {api_response}")
-
+        
         if api_response.get('updates', {}).get('updatedRows', 0) > 0:
-            logger.info(f"SUCCESS: API confirmed {api_response['updates']['updatedRows']} row(s) were written for user {tg_user_id}.")
-            if str(tg_user_id) not in REGISTRATION_STATUS_CACHE or not REGISTRATION_STATUS_CACHE[str(tg_user_id)]['status']:
-                 cache_user_registration_status(str(tg_user_id), True)
-            return True
+            updated_range = api_response['updates']['updatedRange']
+            row_index = int(re.search(r'A(\d+)', updated_range).group(1))
+            logger.info(f"SUCCESS: Row written at index {row_index} for user {tg_user_id}.")
+            return row_index
         else:
-            logger.error(f"FAILURE: API call succeeded but 0 rows were written for user {tg_user_id}. Data: {final_row}")
-            return False
-
+            logger.error(f"FAILURE: API call succeeded but 0 rows were written for user {tg_user_id}.")
+            return None
     except Exception as e:
         logger.error(f"Failed to write data to sheet for user {tg_user_id}: {e}", exc_info=True)
-        return False
+        return None
