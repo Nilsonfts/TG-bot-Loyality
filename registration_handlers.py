@@ -49,28 +49,43 @@ async def get_email(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return REGISTER_JOB_TITLE
 
 async def get_job_title_and_finish(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Получает должность и записывает данные в таблицу."""
+    """Получает должность, записывает данные и кэширует их для избежания "гонки"."""
     context.user_data['initiator_job_title'] = update.message.text
     
     await update.message.reply_text("Проверяю данные и сохраняю...")
 
     user_id = str(update.effective_user.id)
-    context.user_data['status'] = 'Зарегистрирован'
+    
+    # Готовим данные для записи
+    data_to_write = {
+        'submission_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'tg_user_id': user_id,
+        'initiator_username': context.user_data.get('initiator_username', '–'),
+        'initiator_email': context.user_data.get('initiator_email'),
+        'initiator_fio': context.user_data.get('initiator_fio'),
+        'initiator_job_title': context.user_data.get('initiator_job_title'),
+        'initiator_phone': context.user_data.get('initiator_phone'),
+        'status': 'Зарегистрирован'
+    }
 
-    # Используем ту же функцию write_to_sheet, но передаем только регистрационные данные
-    success = g_sheets.write_to_sheet(
-        data=context.user_data,
-        submission_time=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        tg_user_id=user_id
-    )
+    success = g_sheets.write_row(data_to_write)
 
     if success:
         await update.message.reply_text("🎉 <b>Регистрация успешно завершена!</b>\n\nТеперь вам доступны все функции бота.", parse_mode=ParseMode.HTML)
-        # Кэшируем статус, чтобы не проверять таблицу снова
-        g_sheets.cache_user_registration_status(user_id)
+        
+        # === ГЛАВНОЕ ИЗМЕНЕНИЕ ДЛЯ ИСПРАВЛЕНИЯ ОШИБКИ ===
+        # Вместо того чтобы читать из таблицы, мы сразу кладем данные в кэш.
+        # Это решает проблему "гонки данных".
+        g_sheets.INITIATOR_DATA_CACHE[user_id] = {
+            'data': context.user_data.copy(),
+            'timestamp': datetime.datetime.now()
+        }
+        g_sheets.REGISTRATION_STATUS_CACHE[user_id] = {'timestamp': datetime.datetime.now()}
+        logger.info(f"User {user_id} data and registration status were cached immediately after registration.")
+
     else:
         await update.message.reply_text("❌ Произошла ошибка при сохранении данных. Попробуйте позже.")
 
     context.user_data.clear()
-    await navigation_handlers.main_menu_command(update, context) # Показываем обновленное меню
+    await navigation_handlers.main_menu_command(update, context)
     return ConversationHandler.END
