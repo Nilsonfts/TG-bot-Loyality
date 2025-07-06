@@ -6,41 +6,34 @@ import logging
 import datetime
 import gspread
 from google.oauth2.service_account import Credentials
-from constants import SheetCols # Убедимся, что импортируем константы
+from gspread.exceptions import GSpreadException
+from constants import SheetCols
 
 logger = logging.getLogger(__name__)
 
+# Кэширование
 INITIATOR_DATA_CACHE = {}
 REGISTRATION_STATUS_CACHE = {}
 CACHE_EXPIRATION_SECONDS = 300
 
-# get_gspread_client, get_sheet_by_gid остаются такими же "пуленепробиваемыми", как в прошлый раз
-
 def get_gspread_client():
-    # ... (код без изменений)
     GOOGLE_CREDS_JSON = os.getenv("GOOGLE_CREDS_JSON")
     if not GOOGLE_CREDS_JSON:
-        logger.critical("КРИТИЧЕСКАЯ ОШИБКА: Переменная GOOGLE_CREDS_JSON не найдена или пуста!")
+        logger.critical("КРИТИЧЕСКАЯ ОШИБКА: Переменная GOOGLE_CREDS_JSON не найдена!")
         return None
-    logger.info("get_gspread_client: Шаг 1/5: Переменная GOOGLE_CREDS_JSON найдена.")
     try:
         creds_info = json.loads(GOOGLE_CREDS_JSON)
-        logger.info("get_gspread_client: Шаг 2/5: JSON-ключ успешно распарсен.")
         scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
         creds = Credentials.from_service_account_info(creds_info, scopes=scopes)
-        logger.info("get_gspread_client: Шаг 3/5: Объект credentials создан успешно.")
         client = gspread.Client(auth=creds)
-        logger.info("get_gspread_client: Шаг 4/5: Клиент gspread.Client инициализирован.")
         client.list_spreadsheet_files()
-        logger.info("get_gspread_client: Шаг 5/5: Проверочный запрос к Google API прошел успешно. Клиент готов к работе.")
+        logger.info("Клиент Google Sheets успешно инициализирован.")
         return client
     except Exception as e:
         logger.critical(f"КРИТИЧЕСКАЯ ОШИБКА на этапе авторизации в Google: {e}", exc_info=True)
         return None
 
-
 def get_sheet_by_gid(client, gid=None):
-    # ... (код без изменений)
     GOOGLE_SHEET_KEY = os.getenv("GOOGLE_SHEET_KEY")
     SHEET_GID = int(os.getenv("SHEET_GID", 0))
     if gid is None: gid = SHEET_GID
@@ -58,46 +51,49 @@ def get_sheet_by_gid(client, gid=None):
         logger.error(f"Непредвиденная ошибка при открытии листа: {e}", exc_info=True)
         return None
 
-# === НОВАЯ УНИВЕРСАЛЬНАЯ ФУНКЦИЯ ЗАПИСИ ===
+# --- ИЗМЕНЕНИЕ ---
+# Функция полностью переписана, чтобы записывать данные последовательно,
+# не обращая внимания на заголовки в таблице.
 def write_row(data: dict) -> bool:
     """
-    Универсальная функция, которая записывает данные в строку,
-    ориентируясь на заголовки столбцов.
+    Записывает данные в новую строку в строго определенном порядке.
+    Эта функция НЕ зависит от названий столбцов в Google Sheets.
+    
+    ВАЖНО: Порядок столбцов в вашей таблице должен строго соответствовать
+    порядку в списке `COLUMN_ORDER` ниже.
     """
     client = get_gspread_client()
     if not client: return False
     sheet = get_sheet_by_gid(client)
     if not sheet: return False
-    
-    try:
-        headers = sheet.row_values(1)
-        if not headers:
-            logger.error("Не удалось прочитать заголовки из таблицы.")
-            return False
 
-        # Собираем данные в словарь в соответствии с константами
-        row_to_write = {
-            SheetCols.TIMESTAMP: data.get('submission_time'),
-            SheetCols.TG_ID: data.get('tg_user_id'),
-            SheetCols.TG_TAG: data.get('initiator_username'),
-            SheetCols.EMAIL: data.get('initiator_email'),
-            SheetCols.FIO_INITIATOR: data.get('initiator_fio'),
-            SheetCols.JOB_TITLE: data.get('initiator_job_title'),
-            SheetCols.PHONE_INITIATOR: data.get('initiator_phone'),
-            SheetCols.OWNER_LAST_NAME_COL: data.get('owner_last_name'),
-            SheetCols.OWNER_FIRST_NAME_COL: data.get('owner_first_name'),
-            SheetCols.REASON_COL: data.get('reason'),
-            SheetCols.CARD_TYPE_COL: data.get('card_type'),
-            SheetCols.CARD_NUMBER_COL: data.get('card_number'),
-            SheetCols.CATEGORY_COL: data.get('category'),
-            SheetCols.AMOUNT_COL: data.get('amount'),
-            SheetCols.FREQUENCY_COL: data.get('frequency'),
-            SheetCols.ISSUE_LOCATION_COL: data.get('issue_location'),
-            SheetCols.STATUS_COL: data.get('status')
-        }
-        
-        # Собираем итоговый список в правильном порядке, ориентируясь на заголовки
-        final_row = [row_to_write.get(header) for header in headers]
+    try:
+        # Этот список определяет, в каком порядке данные будут записаны в строку.
+        # Если вы поменяете столбцы местами в Google-таблице,
+        # вам нужно будет поменять их местами и в этом списке.
+        COLUMN_ORDER = [
+            data.get('submission_time'),       # Отметка времени
+            data.get('tg_user_id'),             # ID Инициатора
+            data.get('initiator_username'),     # ТТ Инициатора
+            data.get('initiator_email'),        # Адрес электронной почты
+            data.get('initiator_fio'),          # ФИО Инициатора
+            data.get('initiator_job_title'),    # Должность
+            data.get('initiator_phone'),        # Телефон Инициатора
+            data.get('owner_first_name'),       # Имя владельца карты
+            data.get('owner_last_name'),        # Фамилия Владельца
+            data.get('reason'),                 # Причина выдачи бартера/скидки
+            data.get('card_type'),              # Какую карту регистрируем?
+            data.get('card_number'),            # Номер карты
+            data.get('category'),               # Статья пополнения карт
+            data.get('amount'),                 # Сумма бартера или % скидки
+            data.get('frequency'),              # Периодичность наполнения бартера
+            data.get('issue_location'),         # БАР
+            data.get('status'),                 # Статус Согласования
+            # Если у вас есть столбец для причины отказа, добавьте его сюда
+            # data.get('reject_reason'),
+        ]
+
+        final_row = COLUMN_ORDER
         
         api_response = sheet.append_row(final_row, value_input_option='USER_ENTERED')
         
@@ -113,7 +109,8 @@ def write_row(data: dict) -> bool:
         return False
 
 
-# Остальные функции get_sheet_data, is_user_registered и т.д. остаются без изменений.
+# Остальные функции (get_sheet_data, is_user_registered и т.д.) остаются без изменений.
+# Они используют названия столбцов только для ЧТЕНИЯ, что безопасно.
 def get_sheet_data():
     client = get_gspread_client()
     if not client: return []
