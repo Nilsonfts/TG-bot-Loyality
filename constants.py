@@ -14,24 +14,35 @@ CARDS_PER_PAGE = 7
 # --- State Constants for Conversation Handlers ---
 (
     # Registration States
-    REGISTER_CONTACT, REGISTER_FIO, REGISTER_EMAIL, REGISTER_JOB_TITLE,
+    REGISTER_CONTACT,
+    REGISTER_FIO,
+    REGISTER_EMAIL,
+    REGISTER_JOB_TITLE,
     
     # Form Submission States
-    OWNER_LAST_NAME, OWNER_FIRST_NAME, REASON, CARD_TYPE, CARD_NUMBER, CATEGORY,
-    AMOUNT, FREQUENCY, ISSUE_LOCATION, CONFIRMATION,
+    OWNER_LAST_NAME,
+    OWNER_FIRST_NAME,
+    REASON,
+    CARD_TYPE,
+    CARD_NUMBER,
+    CATEGORY,
+    AMOUNT,
+    FREQUENCY,
+    ISSUE_LOCATION,
+    CONFIRMATION,
     
     # Search States
-    SEARCH_CHOOSE_FIELD, AWAIT_SEARCH_QUERY,
+    SEARCH_CHOOSE_FIELD,
+    AWAIT_SEARCH_QUERY,
 
     # Admin states
-    AWAIT_REJECT_REASON, AWAIT_EDIT_VALUE
-) = range(18)
+    AWAIT_REJECT_REASON,
+) = range(17)
 
 
 # --- Callback Data Prefixes ---
 CALLBACK_APPROVE_PREFIX = "approve:"
 CALLBACK_REJECT_PREFIX = "reject:"
-CALLBACK_EDIT_PREFIX = "edit:"
 
 
 # --- Google Sheet Column Names ---
@@ -53,4 +64,4 @@ class SheetCols:
     FREQUENCY_COL = 'Периодичность'
     ISSUE_LOCATION_COL = 'Город/Бар выдачи'
     STATUS_COL = 'Статус Согласования'
-    REASON_REJECT = 'Причина отказа' # Новый столбец
+    REASON_REJECT = 'Причина отказа'
