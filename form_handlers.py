@@ -10,8 +10,6 @@ from telegram.ext import ContextTypes, ConversationHandler
 
 import g_sheets
 import navigation_handlers
-# --- ИЗМЕНЕНИЕ ---
-# Импортируем новый Enum состояний
 from constants import States, SheetCols
 
 logger = logging.getLogger(__name__)
@@ -55,26 +53,22 @@ async def start_form_conversation(update: Update, context: ContextTypes.DEFAULT_
         parse_mode=ParseMode.HTML,
         reply_markup=ReplyKeyboardRemove()
     )
-    # --- ИЗМЕНЕНИЕ ---
     return States.OWNER_LAST_NAME
 
 async def get_owner_last_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> States:
     context.user_data['owner_last_name'] = update.message.text
     await update.message.reply_text("<b>Имя</b> владельца карты.", parse_mode=ParseMode.HTML)
-    # --- ИЗМЕНЕНИЕ ---
     return States.OWNER_FIRST_NAME
 
 async def get_owner_first_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> States:
     context.user_data['owner_first_name'] = update.message.text
     await update.message.reply_text("Причина выдачи?")
-    # --- ИЗМЕНЕНИЕ ---
     return States.REASON
 
 async def get_reason(update: Update, context: ContextTypes.DEFAULT_TYPE) -> States:
     context.user_data['reason'] = update.message.text
     keyboard = [[InlineKeyboardButton("Бартер", callback_data="Бартер"), InlineKeyboardButton("Скидка", callback_data="Скидка")]]
     await update.message.reply_text("Тип карты?", reply_markup=InlineKeyboardMarkup(keyboard))
-    # --- ИЗМЕНЕНИЕ ---
     return States.CARD_TYPE
 
 async def get_card_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> States:
@@ -82,19 +76,16 @@ async def get_card_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> S
     await query.answer()
     context.user_data['card_type'] = query.data
     await query.edit_message_text(f"Выбрано: {query.data}.\n\nНомер карты (телефон через 8)?")
-    # --- ИЗМЕНЕНИЕ ---
     return States.CARD_NUMBER
 
 async def get_card_number(update: Update, context: ContextTypes.DEFAULT_TYPE) -> States:
     number = update.message.text
     if not (number.startswith('8') and number.isdigit() and len(number) == 11):
         await update.message.reply_text("Неверный формат. Нужно 11 цифр, начиная с 8.")
-        # --- ИЗМЕНЕНИЕ ---
         return States.CARD_NUMBER
     context.user_data['card_number'] = number
     keyboard = [[InlineKeyboardButton("АРТ", callback_data="АРТ"), InlineKeyboardButton("МАРКЕТ", callback_data="МАРКЕТ")], [InlineKeyboardButton("Операционный блок", callback_data="Операционный блок")], [InlineKeyboardButton("СКИДКА", callback_data="СКИДКА"), InlineKeyboardButton("Сертификат", callback_data="Сертификат")], [InlineKeyboardButton("Учредители", callback_data="Учредители")]]
     await update.message.reply_text("Статья пополнения?", reply_markup=InlineKeyboardMarkup(keyboard))
-    # --- ИЗМЕНЕНИЕ ---
     return States.CATEGORY
 
 async def get_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> States:
@@ -103,18 +94,15 @@ async def get_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> St
     context.user_data['category'] = query.data
     prompt = "Сумма бартера (только число)?" if context.user_data['card_type'] == "Бартер" else "Процент скидки (только число)?"
     await query.edit_message_text(f"Статья: {query.data}.\n\n{prompt}")
-    # --- ИЗМЕНЕНИЕ ---
     return States.AMOUNT
 
 async def get_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> States:
     if not update.message.text.isdigit():
         await update.message.reply_text("Нужно ввести только число. Пожалуйста, попробуйте еще раз.")
-        # --- ИЗМЕНЕНИЕ ---
         return States.AMOUNT
     context.user_data['amount'] = update.message.text
     keyboard = [[InlineKeyboardButton("Разовая", callback_data="Разовая")], [InlineKeyboardButton("Дополнить к балансу", callback_data="Дополнить к балансу")], [InlineKeyboardButton("Замена номера карты", callback_data="Замена номера карты")]]
     await update.message.reply_text("Периодичность?", reply_markup=InlineKeyboardMarkup(keyboard))
-    # --- ИЗМЕНЕНИЕ ---
     return States.FREQUENCY
 
 async def get_frequency(update: Update, context: ContextTypes.DEFAULT_TYPE) -> States:
@@ -122,7 +110,6 @@ async def get_frequency(update: Update, context: ContextTypes.DEFAULT_TYPE) -> S
     await query.answer()
     context.user_data['frequency'] = query.data
     await query.edit_message_text(f"Выбрано: {query.data}.\n\n<b>Город/Бар выдачи?</b>", parse_mode=ParseMode.HTML)
-    # --- ИЗМЕНЕНИЕ ---
     return States.ISSUE_LOCATION
 
 async def get_issue_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> States:
@@ -130,7 +117,6 @@ async def get_issue_location(update: Update, context: ContextTypes.DEFAULT_TYPE)
     summary = format_summary(context.user_data)
     keyboard = [[InlineKeyboardButton("✅ Да, все верно", callback_data="submit"), InlineKeyboardButton("❌ Нет, заполнить заново", callback_data="restart")]]
     await update.message.reply_text(summary, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
-    # --- ИЗМЕНЕНИЕ ---
     return States.CONFIRMATION
 
 async def submit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -140,18 +126,15 @@ async def submit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     
     user_id = str(query.from_user.id)
     
-    # Собираем данные в единый словарь для функции write_row
     data_to_write = context.user_data.copy()
     data_to_write['submission_time'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     data_to_write['tg_user_id'] = user_id
-    data_to_write['status'] = 'Заявка' # Начальный статус
+    data_to_write['status'] = 'Заявка'
 
-    # Вызываем универсальную функцию записи
     success = g_sheets.write_row(data_to_write)
 
     if success:
         status_text = "\n\n<b>Статус:</b> ✅ Заявка успешно отправлена."
-        # Здесь можно добавить логику уведомления администратора
     else:
         status_text = "\n\n<b>Статус:</b> ❌ Ошибка! Не удалось сохранить заявку. Обратитесь к администратору."
         
@@ -162,11 +145,31 @@ async def submit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     return ConversationHandler.END
 
+# --- ИЗМЕНЕНИЕ ---
+# Полностью переписанная функция для корректного перезапуска диалога
 async def restart_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> States:
-    """Перезапускает диалог подачи заявки с самого начала."""
+    """Корректно перезапускает диалог подачи заявки с самого начала."""
     query = update.callback_query
     await query.answer()
-    # Удаляем сообщение с некорректными данными, чтобы не засорять чат
-    await query.message.delete()
-    # Передаем update в start_form_conversation, чтобы он мог отправить новое сообщение
-    return await start_form_conversation(query, context)
+    
+    # Редактируем сообщение, чтобы пользователь видел, что его действие принято
+    await query.edit_message_text(text="Начинаем заполнение анкеты заново...")
+
+    # Сохраняем данные об инициаторе, чтобы не запрашивать их снова
+    initiator_keys = ['initiator_fio', 'initiator_email', 'initiator_phone', 'initiator_username', 'initiator_job_title']
+    initiator_data = {key: context.user_data.get(key) for key in initiator_keys}
+    
+    # Очищаем все данные, которые вводились в анкете
+    context.user_data.clear()
+    # И возвращаем данные об инициаторе обратно
+    context.user_data.update(initiator_data)
+
+    # Отправляем первое сообщение анкеты как новое сообщение
+    await context.bot.send_message(
+        chat_id=query.message.chat_id,
+        text="Начинаем подачу новой заявки.\nВведите <b>Фамилию</b> владельца карты.",
+        parse_mode=ParseMode.HTML
+    )
+    
+    # Возвращаемся в первое состояние анкеты
+    return States.OWNER_LAST_NAME
