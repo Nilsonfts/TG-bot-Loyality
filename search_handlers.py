@@ -7,28 +7,31 @@ from telegram.ext import ContextTypes, ConversationHandler
 import g_sheets
 # Импортируем утилиту для пагинации из модуля настроек
 from settings_handlers import display_paginated_list
-from constants import SEARCH_CHOOSE_FIELD, AWAIT_SEARCH_QUERY
+# --- ИЗМЕНЕНИЕ ---
+from constants import States, SheetCols
 
 logger = logging.getLogger(__name__)
 
 
-async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> States:
     """Начинает диалог поиска."""
     keyboard = [
         [InlineKeyboardButton("По ФИО владельца", callback_data="search_by_name")],
         [InlineKeyboardButton("По номеру карты", callback_data="search_by_phone")]
     ]
     await update.message.reply_text("Выберите критерий поиска:", reply_markup=InlineKeyboardMarkup(keyboard))
-    return SEARCH_CHOOSE_FIELD
+    # --- ИЗМЕНЕНИЕ ---
+    return States.SEARCH_CHOOSE_FIELD
 
 
-async def search_field_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def search_field_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> States:
     """Обрабатывает выбор поля для поиска."""
     query = update.callback_query
     await query.answer()
     context.user_data['search_field'] = query.data
     await query.edit_message_text("Введите поисковый запрос:")
-    return AWAIT_SEARCH_QUERY
+    # --- ИЗМЕНЕНИЕ ---
+    return States.AWAIT_SEARCH_QUERY
 
 
 async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -42,16 +45,19 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     search_field = context.user_data.get('search_field')
 
     if search_field == 'search_by_name':
-        results = [c for c in all_cards if search_query in c.get('Имя владельца карты', '').lower() or search_query in c.get('Фамилия Владельца', '').lower()]
+        results = [
+            c for c in all_cards 
+            if search_query in c.get(SheetCols.OWNER_FIRST_NAME_COL, '').lower() or \
+               search_query in c.get(SheetCols.OWNER_LAST_NAME_COL, '').lower()
+        ]
     else:  # search_by_phone
-        results = [c for c in all_cards if search_query in str(c.get('Номер карты', ''))]
+        results = [c for c in all_cards if search_query in str(c.get(SheetCols.CARD_NUMBER_COL, ''))]
 
     context.user_data['search_results'] = results
     await loading_msg.delete()
 
-    # Используем утилиту для отображения с пагинацией
-    # Поскольку мы не в callback_query, нам нужно отправить новое сообщение
-    paginated_message = await update.message.reply_text("Результаты поиска:")
+    # Отправляем новое сообщение, которое затем будет редактироваться пагинатором
+    paginated_message = await update.message.reply_text("Загрузка результатов...")
 
     await display_paginated_list(
         update=update,
