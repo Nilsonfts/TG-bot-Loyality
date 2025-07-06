@@ -42,7 +42,6 @@ async def start_form_conversation(update: Update, context: ContextTypes.DEFAULT_
     context.user_data.clear()
     user_id = str(update.effective_user.id)
 
-    # Получаем данные пользователя (он должен быть зарегистрирован, чтобы нажать эту кнопку)
     initiator_data = g_sheets.get_initiator_data(user_id)
     if not initiator_data:
         await update.message.reply_text("Ошибка: не удалось найти ваши данные. Пожалуйста, пройдите регистрацию заново.")
@@ -110,7 +109,7 @@ async def get_frequency(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     query = update.callback_query
     await query.answer()
     context.user_data['frequency'] = query.data
-    await query.edit_message_text(f"Выбрано: {query.data}.\n\n<b>Город_БАР выдачи?</b>", parse_mode=ParseMode.HTML)
+    await query.edit_message_text(f"Выбрано: {query.data}.\n\n<b>Город/Бар выдачи?</b>", parse_mode=ParseMode.HTML)
     return ISSUE_LOCATION
 
 async def get_issue_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -121,18 +120,21 @@ async def get_issue_location(update: Update, context: ContextTypes.DEFAULT_TYPE)
     return CONFIRMATION
 
 async def submit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Финализирует и отправляет единую заявку в Google Sheets."""
+    """Финализирует и отправляет заявку, используя новую функцию write_row."""
     query = update.callback_query
     await query.answer(text="Отправляю заявку...", show_alert=False)
     
     user_id = str(query.from_user.id)
-    context.user_data['status'] = 'Заявка'
     
-    success = g_sheets.write_to_sheet(
-        data=context.user_data,
-        submission_time=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        tg_user_id=user_id
-    )
+    # --- ИЗМЕНЕНИЕ ЗДЕСЬ ---
+    # Собираем данные в единый словарь для новой функции write_row
+    data_to_write = context.user_data.copy() # Копируем все, что уже есть
+    data_to_write['submission_time'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    data_to_write['tg_user_id'] = user_id
+    data_to_write['status'] = 'Заявка'
+
+    # Вызываем новую, "умную" функцию записи
+    success = g_sheets.write_row(data_to_write)
 
     status_text = "\n\n<b>Статус:</b> ✅ Заявка успешно отправлена." if success else "\n\n<b>Статус:</b> ❌ Ошибка! Не удалось сохранить заявку."
     await query.edit_message_text(text=query.message.text_html + status_text, parse_mode=ParseMode.HTML, reply_markup=None)
