@@ -13,8 +13,8 @@ from telegram.ext import ContextTypes
 import g_sheets
 import keyboards
 from constants import (
-    MENU_TEXT_SUBMIT, MENU_TEXT_SEARCH, MENU_TEXT_SETTINGS,
-    MENU_TEXT_MAIN_MENU, CARDS_PER_PAGE, SheetCols # Импортируем константы
+    MENU_TEXT_SUBMIT, MENU_TEXT_SEARCH, MENU_TEXT_SETTINGS, 
+    MENU_TEXT_MAIN_MENU, CARDS_PER_PAGE, SheetCols
 )
 
 logger = logging.getLogger(__name__)
@@ -49,6 +49,29 @@ async def help_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await query.edit_message_text(help_text, reply_markup=keyboards.get_back_to_settings_keyboard(), parse_mode=ParseMode.HTML)
 
+async def my_profile_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Показывает регистрационные данные пользователя."""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = str(query.from_user.id)
+    user_data = g_sheets.get_initiator_data(user_id)
+    
+    if not user_data:
+        await query.edit_message_text("Не удалось найти ваши данные.", reply_markup=keyboards.get_back_to_settings_keyboard())
+        return
+
+    profile_text = (
+        "<b>👤 Ваш профиль</b>\n\n"
+        f"<b>ФИО:</b> {user_data.get('initiator_fio', '-')}\n"
+        f"<b>Должность:</b> {user_data.get('initiator_job_title', '-')}\n"
+        f"<b>Почта:</b> {user_data.get('initiator_email', '-')}\n"
+        f"<b>Телефон:</b> {user_data.get('initiator_phone', '-')}\n\n"
+        "<i>Эти данные используются при подаче заявок. Для их изменения обратитесь к администратору.</i>"
+    )
+    
+    await query.edit_message_text(profile_text, parse_mode=ParseMode.HTML, reply_markup=keyboards.get_back_to_settings_keyboard())
+
 
 async def stats_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Собирает и отображает статистику."""
@@ -63,7 +86,6 @@ async def stats_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     total_cards = len(cards_data)
-    # Используем константы
     barter_count = sum(1 for c in cards_data if c.get(SheetCols.CARD_TYPE_COL) == 'Бартер')
     category_counter = Counter(c.get(SheetCols.CATEGORY_COL) for c in cards_data if c.get(SheetCols.CATEGORY_COL))
     most_common_category = category_counter.most_common(1)[0][0] if category_counter else "–"
@@ -96,10 +118,7 @@ async def export_csv_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         output.seek(0)
         file_to_send = InputFile(output.getvalue().encode('utf-8-sig'), filename=f"export_{datetime.now().strftime('%Y-%m-%d')}.csv")
         await context.bot.send_document(chat_id=query.message.chat_id, document=file_to_send)
-        # Удаляем сообщение "Формирую CSV..."
         await query.message.delete()
-        # Отправляем новое сообщение, чтобы вернуть пользователя в настройки
-        await query.message.reply_text("Экспорт завершен.", reply_markup=keyboards.get_back_to_settings_keyboard())
 
 
 async def display_paginated_list(update: Update, context: ContextTypes.DEFAULT_TYPE, message_to_edit, page: int, data_key: str, list_title: str):
@@ -117,7 +136,6 @@ async def display_paginated_list(update: Update, context: ContextTypes.DEFAULT_T
 
     text = f"<b>{list_title} (Стр. {page + 1}/{total_pages}):</b>\n\n"
     for card in items_on_page:
-        # Используем константы
         owner_name = f"{card.get(SheetCols.OWNER_FIRST_NAME_COL,'')} {card.get(SheetCols.OWNER_LAST_NAME_COL,'-')}".strip()
         amount_text = ""
         if card.get(SheetCols.AMOUNT_COL):
@@ -150,19 +168,17 @@ async def handle_pagination(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     _, data_key, page_str = query.data.split('_')
     is_boss = (str(update.effective_user.id) == g_sheets.os.getenv("BOSS_ID"))
-    # Определяем заголовок в зависимости от ключа данных
+    
     if data_key == 'my_cards':
         list_title = "Все заявки" if is_boss else "Ваши поданные заявки"
-    elif data_key == 'search_results':
+    else: # search_results
         list_title = "Результаты поиска"
-    else:
-        list_title = "Список" # Запасной вариант
-        
+
     await display_paginated_list(update, context, message_to_edit=query.message, page=int(page_str), data_key=data_key, list_title=list_title)
 
 
 async def noop_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Пустой колбэк для кнопок, которые не должны ничего делать (например, счетчик страниц)."""
+    """Пустой колбэк для кнопок, которые не должны ничего делать."""
     await update.callback_query.answer()
 
 
@@ -179,5 +195,4 @@ async def my_cards_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data_key = 'my_cards'
     context.user_data[data_key] = all_cards
     list_title = "Все заявки" if is_boss else "Ваши поданные заявки"
-    
     await display_paginated_list(update, context, message_to_edit=query.message, page=0, data_key=data_key, list_title=list_title)
