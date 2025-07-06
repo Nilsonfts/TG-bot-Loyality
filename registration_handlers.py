@@ -73,14 +73,19 @@ async def get_job_title_and_finish(update: Update, context: ContextTypes.DEFAULT
     if success:
         await update.message.reply_text("🎉 <b>Регистрация успешно завершена!</b>\n\nТеперь вам доступны все функции бота.", parse_mode=ParseMode.HTML)
         
-        # === ГЛАВНОЕ ИЗМЕНЕНИЕ ДЛЯ ИСПРАВЛЕНИЯ ОШИБКИ ===
-        # Вместо того чтобы читать из таблицы, мы сразу кладем данные в кэш.
-        # Это решает проблему "гонки данных".
-        g_sheets.INITIATOR_DATA_CACHE[user_id] = {
-            'data': context.user_data.copy(),
-            'timestamp': datetime.datetime.now()
+        # === ИСПРАВЛЕНИЕ ОШИБКИ ЗДЕСЬ ===
+        initiator_data_to_cache = {
+            'initiator_username': context.user_data.get('initiator_username'),
+            'initiator_email': context.user_data.get('initiator_email'),
+            'initiator_fio': context.user_data.get('initiator_fio'),
+            'initiator_job_title': context.user_data.get('initiator_job_title'),
+            'initiator_phone': context.user_data.get('initiator_phone'),
         }
-        g_sheets.REGISTRATION_STATUS_CACHE[user_id] = {'timestamp': datetime.datetime.now()}
+        g_sheets.INITIATOR_DATA_CACHE[user_id] = {
+            'data': initiator_data_to_cache,
+            'timestamp': datetime.now() # <-- ИСПРАВЛЕНО
+        }
+        g_sheets.REGISTRATION_STATUS_CACHE[user_id] = {'timestamp': datetime.now()} # <-- ИСПРАВЛЕНО
         logger.info(f"User {user_id} data and registration status were cached immediately after registration.")
 
     else:
