@@ -12,7 +12,10 @@ from telegram.ext import ContextTypes
 
 import g_sheets
 import keyboards
-from constants import MENU_TEXT_SUBMIT, MENU_TEXT_SEARCH, MENU_TEXT_SETTINGS, MENU_TEXT_MAIN_MENU, CARDS_PER_PAGE
+from constants import (
+    MENU_TEXT_SUBMIT, MENU_TEXT_SEARCH, MENU_TEXT_SETTINGS,
+    MENU_TEXT_MAIN_MENU, CARDS_PER_PAGE, SheetCols # Импортируем константы
+)
 
 logger = logging.getLogger(__name__)
 
@@ -60,8 +63,9 @@ async def stats_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     total_cards = len(cards_data)
-    barter_count = sum(1 for c in cards_data if c.get('Какую карту регистрируем?') == 'Бартер')
-    category_counter = Counter(c.get('Статья пополнения карт') for c in cards_data if c.get('Статья пополнения карт'))
+    # Используем константы
+    barter_count = sum(1 for c in cards_data if c.get(SheetCols.CARD_TYPE_COL) == 'Бартер')
+    category_counter = Counter(c.get(SheetCols.CATEGORY_COL) for c in cards_data if c.get(SheetCols.CATEGORY_COL))
     most_common_category = category_counter.most_common(1)[0][0] if category_counter else "–"
 
     text = (f"<b>📊 Статистика</b>\n\n"
@@ -85,7 +89,6 @@ async def export_csv_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     output = io.StringIO()
-    # Убедимся, что заголовки берутся из первой записи, если она есть
     if cards_to_export:
         writer = csv.DictWriter(output, fieldnames=cards_to_export[0].keys())
         writer.writeheader()
@@ -93,7 +96,10 @@ async def export_csv_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         output.seek(0)
         file_to_send = InputFile(output.getvalue().encode('utf-8-sig'), filename=f"export_{datetime.now().strftime('%Y-%m-%d')}.csv")
         await context.bot.send_document(chat_id=query.message.chat_id, document=file_to_send)
+        # Удаляем сообщение "Формирую CSV..."
         await query.message.delete()
+        # Отправляем новое сообщение, чтобы вернуть пользователя в настройки
+        await query.message.reply_text("Экспорт завершен.", reply_markup=keyboards.get_back_to_settings_keyboard())
 
 
 async def display_paginated_list(update: Update, context: ContextTypes.DEFAULT_TYPE, message_to_edit, page: int, data_key: str, list_title: str):
@@ -111,17 +117,19 @@ async def display_paginated_list(update: Update, context: ContextTypes.DEFAULT_T
 
     text = f"<b>{list_title} (Стр. {page + 1}/{total_pages}):</b>\n\n"
     for card in items_on_page:
-        owner_name = f"{card.get('Имя владельца карты','')} {card.get('Фамилия Владельца','-')}".strip()
+        # Используем константы
+        owner_name = f"{card.get(SheetCols.OWNER_FIRST_NAME_COL,'')} {card.get(SheetCols.OWNER_LAST_NAME_COL,'-')}".strip()
         amount_text = ""
-        if card.get('Сумма бартера или % скидки'):
-            card_type_str = card.get('Какую карту регистрируем?')
-            amount_text = f"💰 {'Скидка' if card_type_str == 'Скидка' else 'Бартер'}: {card.get('Сумма бартера или % скидки')}{'%' if card_type_str == 'Скидка' else ' ₽'}\n"
+        if card.get(SheetCols.AMOUNT_COL):
+            card_type_str = card.get(SheetCols.CARD_TYPE_COL)
+            amount_val = card.get(SheetCols.AMOUNT_COL)
+            amount_text = f"💰 {'Скидка' if card_type_str == 'Скидка' else 'Бартер'}: {amount_val}{'%' if card_type_str == 'Скидка' else ' ₽'}\n"
 
-        text += (f"👤 <b>Владелец:</b> {owner_name}\n📞 Номер: {card.get('Номер карты', '-')}\n{amount_text}"
-                 f"<b>Статус:</b> <code>{card.get('Статус Согласования', '–')}</code>\n📅 {card.get('Отметка времени', '-')}\n")
+        text += (f"👤 <b>Владелец:</b> {owner_name}\n📞 Номер: {card.get(SheetCols.CARD_NUMBER_COL, '-')}\n{amount_text}"
+                 f"<b>Статус:</b> <code>{card.get(SheetCols.STATUS_COL, '–')}</code>\n📅 {card.get(SheetCols.TIMESTAMP, '-')}\n")
 
         if str(update.effective_user.id) == g_sheets.os.getenv("BOSS_ID"):
-            text += f"🤵‍♂️ <b>Инициатор:</b> {card.get('ФИО Инициатора', '-')} ({card.get('Тег Telegram', '-')})\n"
+            text += f"🤵‍♂️ <b>Инициатор:</b> {card.get(SheetCols.FIO_INITIATOR, '-')} ({card.get(SheetCols.TG_TAG, '-')})\n"
         text += "--------------------\n"
 
     row = []
@@ -142,7 +150,14 @@ async def handle_pagination(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     _, data_key, page_str = query.data.split('_')
     is_boss = (str(update.effective_user.id) == g_sheets.os.getenv("BOSS_ID"))
-    list_title = "Все заявки" if is_boss else "Ваши поданные заявки"
+    # Определяем заголовок в зависимости от ключа данных
+    if data_key == 'my_cards':
+        list_title = "Все заявки" if is_boss else "Ваши поданные заявки"
+    elif data_key == 'search_results':
+        list_title = "Результаты поиска"
+    else:
+        list_title = "Список" # Запасной вариант
+        
     await display_paginated_list(update, context, message_to_edit=query.message, page=int(page_str), data_key=data_key, list_title=list_title)
 
 
@@ -160,11 +175,9 @@ async def my_cards_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text("👑 Загружаю ВСЕ заявки..." if is_boss else "🔍 Загружаю ваши заявки...")
 
     all_cards = g_sheets.get_cards_from_sheet(user_id=None if is_boss else user_id)
-    if not all_cards:
-        await query.edit_message_text("🤷 Заявок не найдено.", reply_markup=keyboards.get_back_to_settings_keyboard())
-        return
-
+    
     data_key = 'my_cards'
     context.user_data[data_key] = all_cards
     list_title = "Все заявки" if is_boss else "Ваши поданные заявки"
+    
     await display_paginated_list(update, context, message_to_edit=query.message, page=0, data_key=data_key, list_title=list_title)
