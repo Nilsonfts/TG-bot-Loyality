@@ -4,6 +4,8 @@
 This file contains all the project constants, such as UI texts and conversation states.
 """
 
+from enum import Enum, auto
+
 # --- Bot UI Constants ---
 MENU_TEXT_REGISTER = "✍️ Регистрация"
 MENU_TEXT_SUBMIT = "✍️ Подать заявку"
@@ -13,32 +15,34 @@ MENU_TEXT_MAIN_MENU = "🏠 Главное меню"
 CARDS_PER_PAGE = 7
 
 # --- State Constants for Conversation Handlers ---
-(
+class States(Enum):
+    """
+    Состояния для ConversationHandlers. Использование Enum делает код более читаемым.
+    """
     # Registration States
-    REGISTER_CONTACT,
-    REGISTER_FIO,
-    REGISTER_EMAIL,
-    REGISTER_JOB_TITLE,
+    REGISTER_CONTACT = auto()
+    REGISTER_FIO = auto()
+    REGISTER_EMAIL = auto()
+    REGISTER_JOB_TITLE = auto()
     
     # Form Submission States
-    OWNER_LAST_NAME,
-    OWNER_FIRST_NAME,
-    REASON,
-    CARD_TYPE,
-    CARD_NUMBER,
-    CATEGORY,
-    AMOUNT,
-    FREQUENCY,
-    ISSUE_LOCATION,
-    CONFIRMATION,
+    OWNER_LAST_NAME = auto()
+    OWNER_FIRST_NAME = auto()
+    REASON = auto()
+    CARD_TYPE = auto()
+    CARD_NUMBER = auto()
+    CATEGORY = auto()
+    AMOUNT = auto()
+    FREQUENCY = auto()
+    ISSUE_LOCATION = auto()
+    CONFIRMATION = auto()
     
     # Search States
-    SEARCH_CHOOSE_FIELD,
-    AWAIT_SEARCH_QUERY,
+    SEARCH_CHOOSE_FIELD = auto()
+    AWAIT_SEARCH_QUERY = auto()
 
     # Admin states
-    AWAIT_REJECT_REASON,
-) = range(17)
+    AWAIT_REJECT_REASON = auto()
 
 
 # --- Callback Data Prefixes ---
