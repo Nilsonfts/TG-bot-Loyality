@@ -12,16 +12,17 @@ logger = logging.getLogger(__name__)
 
 async def send_daily_summary(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Формирует и отправляет ежедневный отчет админу."""
-    boss_id = os.getenv("BOSS_ID")
-    if not boss_id:
-        logger.warning("BOSS_ID not set, skipping daily report.")
+    # --- ИЗМЕНЕНИЕ: Используем REPORT_CHAT_ID вместо BOSS_ID ---
+    report_chat_id = os.getenv("REPORT_CHAT_ID")
+    if not report_chat_id:
+        logger.warning("REPORT_CHAT_ID не установлен, ежедневный отчет пропущен.")
         return
 
-    logger.info("Generating daily summary...")
+    logger.info("Генерация ежедневного отчета...")
     all_cards = g_sheets.get_cards_from_sheet(user_id=None)
     
     if not all_cards:
-        await context.bot.send_message(chat_id=boss_id, text="📄 Ежедневный отчет: За последние 24 часа не было активности.")
+        await context.bot.send_message(chat_id=report_chat_id, text="📄 Ежедневный отчет: За последние 24 часа не было активности.")
         return
 
     yesterday = datetime.now() - timedelta(days=1)
@@ -29,9 +30,20 @@ async def send_daily_summary(context: ContextTypes.DEFAULT_TYPE) -> None:
     
     for card in all_cards:
         try:
+            # Предполагаемый формат времени из Google Sheets
+            # Если формат другой, его нужно будет поменять здесь
             timestamp_str = card.get(SheetCols.TIMESTAMP)
-            card_time = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
-            if card_time > yesterday:
+            # Примерные форматы, которые могут быть в таблице
+            supported_formats = ["%d.%m.%Y %H:%M:%S", "%Y-%m-%d %H:%M:%S"]
+            card_time = None
+            for fmt in supported_formats:
+                try:
+                    card_time = datetime.strptime(timestamp_str, fmt)
+                    break
+                except (ValueError, TypeError):
+                    continue
+            
+            if card_time and card_time > yesterday:
                 recent_cards.append(card)
         except (TypeError, ValueError):
             continue 
@@ -51,4 +63,4 @@ async def send_daily_summary(context: ContextTypes.DEFAULT_TYPE) -> None:
         f"  - 🔥 Ожидают решения: <b>{pending_count}</b>"
     )
 
-    await context.bot.send_message(chat_id=boss_id, text=report_text, parse_mode=ParseMode.HTML)
+    await context.bot.send_message(chat_id=report_chat_id, text=report_text, parse_mode=ParseMode.HTML)
