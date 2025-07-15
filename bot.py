@@ -8,6 +8,7 @@
 
 import logging
 import os
+import datetime
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler,
     ConversationHandler, filters
@@ -20,6 +21,9 @@ import registration_handlers # Новый обработчик
 import form_handlers
 import search_handlers
 import settings_handlers
+import admin_handlers
+import reports  # Новый импорт для отчетов
+import utils
 
 # --- НАСТРОЙКА СРЕДЫ И ЛОГГИРОВАНИЯ ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -35,6 +39,12 @@ def main() -> None:
     if not TELEGRAM_BOT_TOKEN:
         logger.critical("КРИТИЧЕСКАЯ ОШИБКА: TELEGRAM_BOT_TOKEN не установлен.")
         return
+
+    # Инициализируем локальную базу данных
+    if utils.init_local_db():
+        logger.info("Локальная база данных успешно инициализирована")
+    else:
+        logger.warning("Не удалось инициализировать локальную базу данных, работаем только с Google Sheets")
 
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
@@ -100,6 +110,15 @@ def main() -> None:
         fallbacks=[fallback_handler, cancel_handler],
     )
 
+    # --- ДИАЛОГ АДМИНСКИХ ДЕЙСТВИЙ ---
+    admin_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(admin_handlers.reject_request_start, f"^{constants.CALLBACK_REJECT_PREFIX}")],
+        states={
+            constants.AWAIT_REJECT_REASON: [MessageHandler(text_filter, admin_handlers.reject_request_reason)]
+        },
+        fallbacks=[cancel_handler],
+    )
+
     # --- Добавляем все обработчики в приложение ---
     application.add_handler(CommandHandler("start", navigation_handlers.start_command))
     application.add_handler(MessageHandler(filters_map['main'], navigation_handlers.main_menu_command))
@@ -108,6 +127,7 @@ def main() -> None:
     application.add_handler(reg_conv) # Новый диалог
     application.add_handler(form_conv)
     application.add_handler(search_conv)
+    application.add_handler(admin_conv) # Админский диалог
 
     # Обработчики колбэков для меню настроек
     # ... (здесь ваш код для обработчиков кнопок из settings_handlers остается без изменений)
@@ -119,6 +139,28 @@ def main() -> None:
     application.add_handler(CallbackQueryHandler(settings_handlers.handle_pagination, r"^paginate_"))
     application.add_handler(CallbackQueryHandler(settings_handlers.noop_callback, r"^noop$"))
 
+    # Обработчики админских колбэков
+    application.add_handler(CallbackQueryHandler(admin_handlers.approve_request, f"^{constants.CALLBACK_APPROVE_PREFIX}"))
+
+    # Добавляем периодические задачи
+    job_queue = application.job_queue
+    if job_queue:
+        # Ежедневные отчеты админу в 9:00
+        job_queue.run_daily(reports.send_daily_summary, time=datetime.time(hour=9, minute=0), days=(0, 1, 2, 3, 4, 5, 6))
+        
+        # Еженедельная аналитика по понедельникам в 10:00
+        job_queue.run_daily(reports.send_weekly_analytics, time=datetime.time(hour=10, minute=0), days=(0,))  # 0 = понедельник
+        
+        # Напоминания пользователям по средам в 14:00
+        job_queue.run_daily(reports.send_user_reminders, time=datetime.time(hour=14, minute=0), days=(2,))  # 2 = среда
+        
+        # Очистка кэша каждые 6 часов
+        job_queue.run_repeating(utils.cleanup_old_cache, interval=21600, first=10)  # 21600 сек = 6 часов
+        
+        # Резервное копирование БД каждый день в 02:00
+        job_queue.run_daily(utils.backup_local_db, time=datetime.time(hour=2, minute=0), days=(0, 1, 2, 3, 4, 5, 6))
+        
+        logger.info("Все периодические задачи настроены")
 
     # --- Запускаем бота ---
     logger.info("Бот запускается с разделенной логикой регистрации...")

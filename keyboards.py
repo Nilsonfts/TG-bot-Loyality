@@ -4,7 +4,7 @@
 This file contains functions for generating keyboards for the bot.
 """
 
-from telegram import ReplyKeyboardMarkup, InlineKeyboardMarkup, KeyboardButton
+from telegram import ReplyKeyboardMarkup, InlineKeyboardMarkup, KeyboardButton, InlineKeyboardButton
 from constants import (
     MENU_TEXT_REGISTER, MENU_TEXT_SUBMIT, MENU_TEXT_SEARCH,
     MENU_TEXT_SETTINGS, MENU_TEXT_MAIN_MENU

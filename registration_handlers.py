@@ -10,6 +10,7 @@ from telegram.ext import ContextTypes, ConversationHandler
 
 import g_sheets
 import navigation_handlers
+import utils
 from constants import (
     REGISTER_CONTACT, REGISTER_FIO, REGISTER_EMAIL, REGISTER_JOB_TITLE
 )
@@ -35,22 +36,36 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     return REGISTER_FIO
 
 async def get_fio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data['initiator_fio'] = update.message.text
+    fio = utils.sanitize_input(update.message.text, 100)
+    
+    if not utils.validate_fio(fio):
+        await update.message.reply_text("❌ Пожалуйста, введите полное ФИО (минимум имя и фамилию).\n\nПример: Иванов Иван Иванович")
+        return REGISTER_FIO
+    
+    context.user_data['initiator_fio'] = fio
     await update.message.reply_text("✅ ФИО принято.\n\n📧 Введите вашу <b>рабочую почту</b>.", parse_mode=ParseMode.HTML)
     return REGISTER_EMAIL
 
 async def get_email(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    email = update.message.text
-    if not re.match(r"[^@]+@[^@]+\.[^@]+", email):
-        await update.message.reply_text("❌ Формат почты неверный. Попробуйте еще раз.")
+    email = utils.sanitize_input(update.message.text, 255)
+    
+    if not utils.validate_email(email):
+        await update.message.reply_text("❌ Формат почты неверный. Введите корректный email адрес.\n\nПример: ivanov@company.com")
         return REGISTER_EMAIL
+    
     context.user_data['initiator_email'] = email
     await update.message.reply_text("✅ Почта принята.\n\n🏢 Введите вашу <b>должность</b>.", parse_mode=ParseMode.HTML)
     return REGISTER_JOB_TITLE
 
 async def get_job_title_and_finish(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Получает должность, записывает данные и кэширует их для избежания "гонки"."""
-    context.user_data['initiator_job_title'] = update.message.text
+    job_title = utils.sanitize_input(update.message.text, 100)
+    
+    if len(job_title) < 2:
+        await update.message.reply_text("❌ Должность слишком короткая. Введите корректную должность.")
+        return REGISTER_JOB_TITLE
+    
+    context.user_data['initiator_job_title'] = job_title
     
     await update.message.reply_text("Проверяю данные и сохраняю...")
 
@@ -68,10 +83,21 @@ async def get_job_title_and_finish(update: Update, context: ContextTypes.DEFAULT
         'status': 'Зарегистрирован'
     }
 
-    success = g_sheets.write_row(data_to_write)
+    # Инициализируем локальную БД если еще не создана
+    utils.init_local_db()
+    
+    # Сохраняем в локальную БД
+    local_success = utils.save_user_to_local_db(data_to_write)
+    
+    # Сохраняем в Google Sheets
+    google_success = g_sheets.write_row(data_to_write)
 
-    if success:
-        await update.message.reply_text("🎉 <b>Регистрация успешно завершена!</b>\n\nТеперь вам доступны все функции бота.", parse_mode=ParseMode.HTML)
+    if google_success or local_success:
+        success_msg = "🎉 <b>Регистрация успешно завершена!</b>\n\nТеперь вам доступны все функции бота."
+        if not google_success:
+            success_msg += "\n\n⚠️ <i>Данные сохранены локально, синхронизация с облаком произойдет позже.</i>"
+        
+        await update.message.reply_text(success_msg, parse_mode=ParseMode.HTML)
         
         # === ИСПРАВЛЕНИЕ ОШИБКИ ЗДЕСЬ ===
         initiator_data_to_cache = {
@@ -89,7 +115,7 @@ async def get_job_title_and_finish(update: Update, context: ContextTypes.DEFAULT
         logger.info(f"User {user_id} data and registration status were cached immediately after registration.")
 
     else:
-        await update.message.reply_text("❌ Произошла ошибка при сохранении данных. Попробуйте позже.")
+        await update.message.reply_text("❌ Произошла ошибка при сохранении данных. Попробуйте позже или обратитесь к администратору.")
 
     context.user_data.clear()
     await navigation_handlers.main_menu_command(update, context)

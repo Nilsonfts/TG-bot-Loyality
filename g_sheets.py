@@ -172,3 +172,86 @@ def get_cards_from_sheet(user_id: str = None) -> list:
     else:
         user_cards = valid_records
     return list(reversed(user_cards))
+
+def update_cell_by_row(row_index: int, column_name: str, new_value: str) -> bool:
+    """
+    Обновляет конкретную ячейку в строке по индексу строки и названию столбца.
+    row_index: номер строки (начиная с 1, где 1 - заголовки)
+    column_name: название столбца из SheetCols
+    new_value: новое значение для ячейки
+    """
+    client = get_gspread_client()
+    if not client: 
+        logger.error("Не удалось получить клиент Google Sheets")
+        return False
+    
+    sheet = get_sheet_by_gid(client)
+    if not sheet: 
+        logger.error("Не удалось получить лист Google Sheets")
+        return False
+    
+    try:
+        # Получаем заголовки для определения номера столбца
+        headers = sheet.row_values(1)
+        if column_name not in headers:
+            logger.error(f"Столбец '{column_name}' не найден в заголовках")
+            return False
+        
+        column_index = headers.index(column_name) + 1  # +1 для gspread (1-based indexing)
+        
+        # Обновляем ячейку
+        sheet.update_cell(row_index + 1, column_index, new_value)  # +1 т.к. row_index начинается с 0, а первая строка - заголовки
+        logger.info(f"Успешно обновлена ячейка [{row_index + 1}, {column_index}] = '{new_value}'")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Ошибка при обновлении ячейки: {e}", exc_info=True)
+        return False
+
+def get_row_data(row_index: int) -> dict:
+    """
+    Получает данные строки по индексу.
+    row_index: номер строки (начиная с 0 для данных, не считая заголовки)
+    """
+    try:
+        all_records = get_sheet_data()
+        if 0 <= row_index < len(all_records):
+            return all_records[row_index]
+        else:
+            logger.error(f"Индекс строки {row_index} выходит за границы данных")
+            return {}
+    except Exception as e:
+        logger.error(f"Ошибка при получении данных строки {row_index}: {e}", exc_info=True)
+        return {}
+
+def search_applications_with_status(status: str) -> list:
+    """
+    Ищет заявки по статусу. Полезно для мониторинга.
+    """
+    all_records = get_sheet_data()
+    return [record for record in all_records if record.get(SheetCols.STATUS_COL) == status]
+
+def get_statistics() -> dict:
+    """
+    Возвращает базовую статистику по заявкам.
+    """
+    all_records = get_sheet_data()
+    if not all_records:
+        return {}
+    
+    total = len(all_records)
+    by_status = {}
+    by_card_type = {}
+    
+    for record in all_records:
+        status = record.get(SheetCols.STATUS_COL, 'Неизвестно')
+        card_type = record.get(SheetCols.CARD_TYPE_COL, 'Неизвестно')
+        
+        by_status[status] = by_status.get(status, 0) + 1
+        by_card_type[card_type] = by_card_type.get(card_type, 0) + 1
+    
+    return {
+        'total': total,
+        'by_status': by_status,
+        'by_card_type': by_card_type
+    }

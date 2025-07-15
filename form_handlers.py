@@ -3,6 +3,7 @@
 import logging
 from datetime import datetime
 import re
+import os
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
 from telegram.constants import ParseMode
@@ -10,6 +11,8 @@ from telegram.ext import ContextTypes, ConversationHandler
 
 import g_sheets
 import navigation_handlers
+import admin_handlers
+import utils
 from constants import (
     OWNER_LAST_NAME, OWNER_FIRST_NAME, REASON, CARD_TYPE, CARD_NUMBER, CATEGORY,
     AMOUNT, FREQUENCY, ISSUE_LOCATION, CONFIRMATION
@@ -56,12 +59,22 @@ async def start_form_conversation(update: Update, context: ContextTypes.DEFAULT_
     return OWNER_LAST_NAME
 
 async def get_owner_last_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data['owner_last_name'] = update.message.text
+    last_name = utils.sanitize_input(update.message.text, 50)
+    if len(last_name) < 2:
+        await update.message.reply_text("❌ Фамилия слишком короткая. Введите корректную фамилию.")
+        return OWNER_LAST_NAME
+    
+    context.user_data['owner_last_name'] = last_name
     await update.message.reply_text("<b>Имя</b> владельца карты.", parse_mode=ParseMode.HTML)
     return OWNER_FIRST_NAME
 
 async def get_owner_first_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data['owner_first_name'] = update.message.text
+    first_name = utils.sanitize_input(update.message.text, 50)
+    if len(first_name) < 2:
+        await update.message.reply_text("❌ Имя слишком короткое. Введите корректное имя.")
+        return OWNER_FIRST_NAME
+    
+    context.user_data['owner_first_name'] = first_name
     await update.message.reply_text("Причина выдачи?")
     return REASON
 
@@ -79,10 +92,12 @@ async def get_card_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     return CARD_NUMBER
 
 async def get_card_number(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    number = update.message.text
-    if not (number.startswith('8') and number.isdigit() and len(number) == 11):
-        await update.message.reply_text("Неверный формат. Нужно 11 цифр, начиная с 8.")
+    number = update.message.text.strip()
+    
+    if not utils.validate_phone_number(number):
+        await update.message.reply_text("❌ Неверный формат номера карты. Требуется 11 цифр, начиная с 8.\n\nПример: 89991234567")
         return CARD_NUMBER
+    
     context.user_data['card_number'] = number
     keyboard = [[InlineKeyboardButton("АРТ", callback_data="АРТ"), InlineKeyboardButton("МАРКЕТ", callback_data="МАРКЕТ")], [InlineKeyboardButton("Операционный блок", callback_data="Операционный блок")], [InlineKeyboardButton("СКИДКА", callback_data="СКИДКА"), InlineKeyboardButton("Сертификат", callback_data="Сертификат")], [InlineKeyboardButton("Учредители", callback_data="Учредители")]]
     await update.message.reply_text("Статья пополнения?", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -97,10 +112,15 @@ async def get_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     return AMOUNT
 
 async def get_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if not update.message.text.isdigit():
-        await update.message.reply_text("Нужно ввести только число.")
+    amount_text = update.message.text.strip()
+    card_type = context.user_data.get('card_type', '')
+    
+    is_valid, error_msg = utils.validate_amount(amount_text, card_type)
+    if not is_valid:
+        await update.message.reply_text(f"❌ {error_msg}\n\nПопробуйте еще раз:")
         return AMOUNT
-    context.user_data['amount'] = update.message.text
+    
+    context.user_data['amount'] = amount_text
     keyboard = [[InlineKeyboardButton("Разовая", callback_data="Разовая")], [InlineKeyboardButton("Дополнить к балансу", callback_data="Дополнить к балансу")], [InlineKeyboardButton("Замена номера карты", callback_data="Замена номера карты")]]
     await update.message.reply_text("Периодичность?", reply_markup=InlineKeyboardMarkup(keyboard))
     return FREQUENCY
@@ -131,12 +151,46 @@ async def submit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     data_to_write = context.user_data.copy() # Копируем все, что уже есть
     data_to_write['submission_time'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     data_to_write['tg_user_id'] = user_id
-    data_to_write['status'] = 'Заявка'
+    data_to_write['status'] = 'На согласовании'  # Изменено с 'Заявка' на более понятный статус
 
-    # Вызываем новую, "умную" функцию записи
-    success = g_sheets.write_row(data_to_write)
+    # Инициализируем локальную БД если еще не создана
+    utils.init_local_db()
+    
+    # Сохраняем в локальную БД
+    local_app_id = utils.save_application_to_local_db(data_to_write)
+    
+    # Вызываем новую, "умную" функцию записи в Google Sheets
+    google_success = g_sheets.write_row(data_to_write)
 
-    status_text = "\n\n<b>Статус:</b> ✅ Заявка успешно отправлена." if success else "\n\n<b>Статус:</b> ❌ Ошибка! Не удалось сохранить заявку."
+    if google_success or local_app_id:
+        if google_success:
+            status_text = "\n\n<b>Статус:</b> ✅ Заявка успешно отправлена на согласование."
+        else:
+            status_text = "\n\n<b>Статус:</b> ✅ Заявка сохранена локально и будет отправлена на согласование после синхронизации."
+        
+        # Уведомляем админа о новой заявке только если удалось сохранить в Google Sheets
+        if google_success:
+            boss_id = os.getenv("BOSS_ID")
+            if boss_id:
+                try:
+                    # Получаем данные для уведомления
+                    all_records = g_sheets.get_sheet_data()
+                    if all_records:
+                        row_index = len(all_records) - 1  # Индекс последней записи
+                        notification = admin_handlers.format_admin_notification(data_to_write, row_index)
+                        
+                        await context.bot.send_message(
+                            chat_id=boss_id,
+                            text=notification["text"],
+                            reply_markup=notification["reply_markup"],
+                            parse_mode=ParseMode.HTML
+                        )
+                        logger.info(f"Админ уведомлен о новой заявке от пользователя {user_id}")
+                except Exception as e:
+                    logger.error(f"Не удалось уведомить админа о новой заявке: {e}")
+    else:
+        status_text = "\n\n<b>Статус:</b> ❌ Ошибка! Не удалось сохранить заявку. Попробуйте позже."
+    
     await query.edit_message_text(text=query.message.text_html + status_text, parse_mode=ParseMode.HTML, reply_markup=None)
     
     context.user_data.clear()
