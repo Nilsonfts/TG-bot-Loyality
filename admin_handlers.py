@@ -15,22 +15,65 @@ logger = logging.getLogger(__name__)
 
 def format_admin_notification(row_data: dict, row_index: int) -> dict:
     """Форматирует сообщение и клавиатуру для уведомления админа."""
-    initiator_info = f"{row_data.get(SheetCols.FIO_INITIATOR, 'N/A')} ({row_data.get(SheetCols.TG_TAG, 'N/A')})"
-    owner_info = f"{row_data.get(SheetCols.OWNER_FIRST_NAME_COL, '')} {row_data.get(SheetCols.OWNER_LAST_NAME_COL, '')}".strip()
-    amount_val = row_data.get(SheetCols.AMOUNT_COL, '-')
-    card_type_str = row_data.get(SheetCols.CARD_TYPE_COL)
+    # Логгируем входные данные для отладки
+    logger.info(f"format_admin_notification вызвана с row_data: {row_data}")
+    logger.info(f"format_admin_notification вызвана с row_index: {row_index}")
+    
+    # Проверяем, какой формат данных у нас: из Google Sheets или из context.user_data
+    if 'initiator_fio' in row_data:
+        # Данные из context.user_data (form_handlers)
+        initiator_info = f"{row_data.get('initiator_fio', 'N/A')} ({row_data.get('initiator_username', 'N/A')})"
+        owner_info = f"{row_data.get('owner_first_name', '')} {row_data.get('owner_last_name', '')}".strip()
+        amount_val = row_data.get('amount', '-')
+        card_type_str = row_data.get('card_type')
+        card_number = row_data.get('card_number')
+        category = row_data.get('category')
+        issue_location = row_data.get('issue_location')
+        logger.info("Используем формат данных из context.user_data")
+    else:
+        # Данные из Google Sheets (с константами SheetCols)
+        initiator_info = f"{row_data.get(SheetCols.FIO_INITIATOR, 'N/A')} ({row_data.get(SheetCols.TG_TAG, 'N/A')})"
+        owner_info = f"{row_data.get(SheetCols.OWNER_FIRST_NAME_COL, '')} {row_data.get(SheetCols.OWNER_LAST_NAME_COL, '')}".strip()
+        amount_val = row_data.get(SheetCols.AMOUNT_COL, '-')
+        card_type_str = row_data.get(SheetCols.CARD_TYPE_COL)
+        card_number = row_data.get(SheetCols.CARD_NUMBER_COL)
+        category = row_data.get(SheetCols.CATEGORY_COL)
+        issue_location = row_data.get(SheetCols.ISSUE_LOCATION_COL)
+        logger.info("Используем формат данных из Google Sheets")
+    
+    # Обрабатываем пустые значения
+    if not owner_info.strip():
+        owner_info = "Не указано"
+    if not card_number:
+        card_number = "Не указан"
+    if not category:
+        category = "Не указана"
+    if not issue_location:
+        issue_location = "Не указан"
+    
     amount_text = f"{amount_val}{'%' if card_type_str == 'Скидка' else ' ₽'}"
     
     text = (
         f"🔔 <b>Новая заявка на согласование (№{row_index})</b> 🔔\n\n"
         f"<b>Инициатор:</b> {initiator_info}\n"
         f"<b>Владелец карты:</b> {owner_info}\n"
-        f"<b>Номер карты:</b> <code>{row_data.get(SheetCols.CARD_NUMBER_COL)}</code>\n"
+        f"<b>Номер карты:</b> <code>{card_number}</code>\n"
         f"<b>Сумма/Скидка:</b> {amount_text}\n"
-        f"<b>Статья:</b> {row_data.get(SheetCols.CATEGORY_COL)}\n"
-        f"<b>Город/Бар:</b> {row_data.get(SheetCols.ISSUE_LOCATION_COL)}\n\n"
+        f"<b>Статья:</b> {category}\n"
+        f"<b>Город/Бар:</b> {issue_location}\n\n"
         "Требуется ваше действие."
     )
+    
+    logger.info(f"Сформированное уведомление: {text}")
+    
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Одобрить", callback_data=f"{CALLBACK_APPROVE_PREFIX}{row_index}"),
+            InlineKeyboardButton("❌ Отклонить", callback_data=f"{CALLBACK_REJECT_PREFIX}{row_index}")
+        ]
+    ])
+    
+    return {"text": text, "reply_markup": keyboard}
     
     keyboard = InlineKeyboardMarkup([
         [

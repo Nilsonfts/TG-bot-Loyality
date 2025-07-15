@@ -64,6 +64,8 @@ def write_row(data: dict) -> bool:
     Универсальная функция, которая записывает данные в строку,
     ориентируясь на заголовки столбцов.
     """
+    logger.info(f"write_row вызвана с данными: {data}")
+    
     client = get_gspread_client()
     if not client: return False
     sheet = get_sheet_by_gid(client)
@@ -74,6 +76,8 @@ def write_row(data: dict) -> bool:
         if not headers:
             logger.error("Не удалось прочитать заголовки из таблицы.")
             return False
+
+        logger.info(f"Заголовки таблицы: {headers}")
 
         # Собираем данные в словарь в соответствии с константами
         row_to_write = {
@@ -96,8 +100,12 @@ def write_row(data: dict) -> bool:
             SheetCols.STATUS_COL: data.get('status')
         }
         
+        logger.info(f"Подготовленные данные для записи: {row_to_write}")
+        
         # Собираем итоговый список в правильном порядке, ориентируясь на заголовки
         final_row = [row_to_write.get(header) for header in headers]
+        
+        logger.info(f"Финальная строка для записи: {final_row}")
         
         api_response = sheet.append_row(final_row, value_input_option='USER_ENTERED')
         
