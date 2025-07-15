@@ -346,3 +346,45 @@ def backup_local_db() -> bool:
     except Exception as e:
         logger.error(f"Ошибка при создании резервной копии БД: {e}")
         return False
+
+def get_statistics() -> dict:
+    """
+    Возвращает статистику по заявкам из локальной базы данных.
+    """
+    try:
+        db_path = os.path.join(os.getcwd(), 'bot_data.db')
+        
+        if not os.path.exists(db_path):
+            return {"error": "База данных не найдена"}
+        
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        # Общее количество заявок
+        cursor.execute("SELECT COUNT(*) FROM applications")
+        total = cursor.fetchone()[0]
+        
+        # Статистика по статусам
+        cursor.execute("SELECT status, COUNT(*) FROM applications GROUP BY status")
+        status_stats = dict(cursor.fetchall())
+        
+        # Статистика по типам карт
+        cursor.execute("SELECT card_type, COUNT(*) FROM applications GROUP BY card_type")
+        card_type_stats = dict(cursor.fetchall())
+        
+        # Статистика по категориям
+        cursor.execute("SELECT category, COUNT(*) FROM applications GROUP BY category")
+        category_stats = dict(cursor.fetchall())
+        
+        conn.close()
+        
+        return {
+            'total': total,
+            'by_status': status_stats,
+            'by_card_type': card_type_stats,
+            'by_category': category_stats
+        }
+        
+    except Exception as e:
+        logger.error(f"Ошибка при получении статистики: {e}")
+        return {"error": str(e)}
