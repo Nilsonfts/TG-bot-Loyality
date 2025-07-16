@@ -200,6 +200,35 @@ def get_cards_from_sheet(user_id: str = None) -> list:
         user_cards = valid_records
     return list(reversed(user_cards))
 
+def debug_sheet_headers():
+    """
+    Отладочная функция для просмотра заголовков таблицы
+    """
+    client = get_gspread_client()
+    if not client:
+        logger.error("Не удалось получить клиент Google Sheets")
+        return []
+    
+    sheet = get_sheet_by_gid(client)
+    if not sheet:
+        logger.error("Не удалось получить лист Google Sheets")
+        return []
+    
+    try:
+        headers = sheet.row_values(1)
+        logger.info("=== ОТЛАДКА ЗАГОЛОВКОВ ТАБЛИЦЫ ===")
+        for i, header in enumerate(headers):
+            logger.info(f"Столбец {i+1}: '{header}' (len={len(header)})")
+            # Показываем символы, которые могут быть невидимыми
+            char_codes = [ord(c) for c in header]
+            logger.info(f"  Коды символов: {char_codes}")
+        logger.info("=== КОНЕЦ ОТЛАДКИ ===")
+        return headers
+    except Exception as e:
+        logger.error(f"Ошибка при получении заголовков: {e}")
+        return []
+
+
 def update_cell_by_row(row_index: int, column_name: str, new_value: str) -> bool:
     """
     Обновляет конкретную ячейку в строке по индексу строки и названию столбца.
@@ -224,12 +253,36 @@ def update_cell_by_row(row_index: int, column_name: str, new_value: str) -> bool
         headers = sheet.row_values(1)
         logger.info(f"Заголовки таблицы: {headers}")
         
-        if column_name not in headers:
+        # Сначала пробуем точное совпадение
+        column_index = None
+        if column_name in headers:
+            column_index = headers.index(column_name) + 1
+            logger.info(f"✅ Найдено точное совпадение: '{column_name}' в позиции {column_index}")
+        else:
+            # Пробуем найти похожий заголовок (убираем лишние пробелы и переносы)
+            normalized_column_name = column_name.strip().replace('\n', ' ')
+            for i, header in enumerate(headers):
+                normalized_header = header.strip().replace('\n', ' ')
+                if normalized_header == normalized_column_name:
+                    column_index = i + 1
+                    logger.info(f"🔄 Найдено точное совпадение по нормализованному имени: '{header}' -> '{column_name}' в позиции {column_index}")
+                    break
+            
+            # Если не найдено, пробуем частичное совпадение
+            if column_index is None:
+                for i, header in enumerate(headers):
+                    if column_name.replace('\n', '').replace(' ', '') in header.replace('\n', '').replace(' ', ''):
+                        column_index = i + 1
+                        logger.info(f"⚠️ Найдено частичное совпадение: '{header}' -> '{column_name}' в позиции {column_index}")
+                        break
+        
+        if column_index is None:
             logger.error(f"Столбец '{column_name}' не найден в заголовках")
             logger.error(f"Доступные заголовки: {headers}")
+            # Покажем нормализованные версии для отладки
+            normalized_headers = [h.strip().replace('\n', ' ') for h in headers]
+            logger.error(f"Нормализованные заголовки: {normalized_headers}")
             return False
-        
-        column_index = headers.index(column_name) + 1  # +1 для gspread (1-based indexing)
         
         # Вычисляем номер строки в Google Sheets (row_index + 2, т.к. +1 для заголовка и +1 для 1-based indexing)
         sheet_row_number = row_index + 2
