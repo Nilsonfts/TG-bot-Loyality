@@ -261,22 +261,36 @@ def update_cell_by_row(row_index: int, column_name: str, new_value: str) -> bool
     column_name: название столбца из SheetCols
     new_value: новое значение для ячейки
     """
-    logger.info(f"update_cell_by_row вызвана: row_index={row_index}, column_name='{column_name}', new_value='{new_value}'")
+    logger.info(f"🔄 update_cell_by_row вызвана: row_index={row_index}, column_name='{column_name}', new_value='{new_value}'")
     
     client = get_gspread_client()
     if not client: 
-        logger.error("Не удалось получить клиент Google Sheets")
+        logger.error("❌ Не удалось получить клиент Google Sheets")
         return False
     
     sheet = get_sheet_by_gid(client)
     if not sheet: 
-        logger.error("Не удалось получить лист Google Sheets")
+        logger.error("❌ Не удалось получить лист Google Sheets")
         return False
     
     try:
+        # Сначала проверим, сколько строк в таблице
+        all_data = sheet.get_all_values()
+        total_rows = len(all_data)
+        data_rows = total_rows - 1  # Исключаем заголовок
+        
+        logger.info(f"📊 Всего строк в таблице: {total_rows} (включая заголовок)")
+        logger.info(f"📊 Строк с данными: {data_rows}")
+        logger.info(f"📍 Запрашиваемый row_index: {row_index}")
+        
+        # Проверяем, что row_index валидный
+        if row_index < 0 or row_index >= data_rows:
+            logger.error(f"❌ Неверный row_index: {row_index}. Должен быть от 0 до {data_rows - 1}")
+            return False
+        
         # Получаем заголовки для определения номера столбца
         headers = sheet.row_values(1)
-        logger.info(f"Заголовки таблицы: {headers}")
+        logger.info(f"📋 Заголовки таблицы: {headers}")
         
         # Сначала пробуем точное совпадение
         column_index = None
@@ -302,17 +316,23 @@ def update_cell_by_row(row_index: int, column_name: str, new_value: str) -> bool
                         break
         
         if column_index is None:
-            logger.error(f"Столбец '{column_name}' не найден в заголовках")
-            logger.error(f"Доступные заголовки: {headers}")
+            logger.error(f"❌ Столбец '{column_name}' не найден в заголовках")
+            logger.error(f"📋 Доступные заголовки: {headers}")
             # Покажем нормализованные версии для отладки
             normalized_headers = [h.strip().replace('\n', ' ') for h in headers]
-            logger.error(f"Нормализованные заголовки: {normalized_headers}")
+            logger.error(f"📋 Нормализованные заголовки: {normalized_headers}")
             return False
         
         # Вычисляем номер строки в Google Sheets (row_index + 2, т.к. +1 для заголовка и +1 для 1-based indexing)
         sheet_row_number = row_index + 2
         
-        logger.info(f"Обновляем ячейку: строка {sheet_row_number}, столбец {column_index} ('{column_name}')")
+        logger.info(f"🎯 Обновляем ячейку: строка {sheet_row_number}, столбец {column_index} ('{column_name}')")
+        logger.info(f"🎯 Формула: row_index({row_index}) + 2 = sheet_row_number({sheet_row_number})")
+        
+        # Проверяем, что не выходим за границы таблицы
+        if sheet_row_number > total_rows:
+            logger.error(f"❌ Попытка обновить строку {sheet_row_number}, но в таблице только {total_rows} строк")
+            return False
         
         # Обновляем ячейку
         sheet.update_cell(sheet_row_number, column_index, new_value)
@@ -320,8 +340,8 @@ def update_cell_by_row(row_index: int, column_name: str, new_value: str) -> bool
         return True
         
     except Exception as e:
-        logger.error(f"❌ Ошибка при обновлении ячейки: {e}", exc_info=True)
-        logger.error(f"Параметры: row_index={row_index}, column_name='{column_name}', new_value='{new_value}'")
+        logger.error(f"💥 Ошибка при обновлении ячейки: {e}", exc_info=True)
+        logger.error(f"📊 Параметры: row_index={row_index}, column_name='{column_name}', new_value='{new_value}'")
         return False
 
 def get_row_data(row_index: int) -> dict:

@@ -217,13 +217,13 @@ async def submit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             boss_id = os.getenv("BOSS_ID")
             if boss_id:
                 try:
-                    # Получаем данные для уведомления
+                    # ИСПРАВЛЕНИЕ: Получаем данные ПОСЛЕ добавления новой записи
                     all_records = g_sheets.get_sheet_data()
                     if all_records:
-                        # row_index для админских действий = номер строки в Google Sheets
-                        # len(all_records) даёт нам номер записи, 
-                        # но для gspread нужен номер строки (запись + 1 заголовок = len(all_records))
+                        # Новая запись - это последняя запись в массиве
                         row_index = len(all_records) - 1  # Индекс последней записи (для get_row_data)
+                        logger.info(f"📊 Всего записей после добавления: {len(all_records)}, row_index для админа: {row_index}")
+                        
                         notification = admin_handlers.format_admin_notification(data_to_write, row_index)
                         
                         await context.bot.send_message(
@@ -233,11 +233,14 @@ async def submit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
                             parse_mode=ParseMode.HTML
                         )
                         logger.info(f"Админ уведомлен о новой заявке от пользователя {user_id}")
+                    else:
+                        logger.error("❌ Не удалось получить обновленные данные таблицы")
                 except Exception as e:
                     logger.error(f"Не удалось уведомить админа о новой заявке: {e}")
                     # Логируем детали для отладки
                     logger.error(f"data_to_write содержит: {data_to_write}")
-                    logger.error(f"row_index: {len(all_records) - 1 if all_records else 'N/A'}")
+                    import traceback
+                    logger.error(f"Трейсбек ошибки: {traceback.format_exc()}")
     else:
         status_text = "\n\n<b>Статус:</b> ❌ Ошибка! Не удалось сохранить заявку. Попробуйте позже."
     
