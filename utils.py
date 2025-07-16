@@ -64,9 +64,20 @@ def validate_amount(amount: str, card_type: str) -> tuple[bool, str]:
 
 # === ВНУТРЕННЯЯ БАЗА ДАННЫХ (SQLite) ===
 
+def get_db_path():
+    """Возвращает путь к базе данных, используя volume если доступен."""
+    volume_path = os.getenv('RAILWAY_VOLUME_MOUNT_PATH', os.getcwd())
+    return os.path.join(volume_path, 'bot_data.db')
+
 def init_local_db():
     """Инициализация локальной SQLite базы для быстрого доступа к данным."""
-    db_path = os.path.join(os.getcwd(), 'bot_data.db')
+    # Используем volume для постоянного хранения данных
+    db_path = get_db_path()
+    
+    # Создаём директорию если её нет
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    
+    logger.info(f"Инициализация БД по пути: {db_path}")
     
     try:
         conn = sqlite3.connect(db_path)
@@ -127,7 +138,7 @@ def init_local_db():
 def save_user_to_local_db(user_data: Dict) -> bool:
     """Сохранение данных пользователя в локальную БД."""
     try:
-        db_path = os.path.join(os.getcwd(), 'bot_data.db')
+        db_path = get_db_path()
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         
@@ -156,7 +167,7 @@ def save_user_to_local_db(user_data: Dict) -> bool:
 def save_application_to_local_db(app_data: Dict) -> Optional[int]:
     """Сохранение заявки в локальную БД. Возвращает ID записи."""
     try:
-        db_path = os.path.join(os.getcwd(), 'bot_data.db')
+        db_path = get_db_path()
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         
@@ -191,7 +202,7 @@ def save_application_to_local_db(app_data: Dict) -> Optional[int]:
 def get_user_from_local_db(tg_id: str) -> Optional[Dict]:
     """Получение данных пользователя из локальной БД."""
     try:
-        db_path = os.path.join(os.getcwd(), 'bot_data.db')
+        db_path = get_db_path()
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
@@ -211,7 +222,7 @@ def get_user_from_local_db(tg_id: str) -> Optional[Dict]:
 def search_applications_local(query: str, search_type: str = 'name', user_id: str = None) -> List[Dict]:
     """Быстрый поиск заявок в локальной БД."""
     try:
-        db_path = os.path.join(os.getcwd(), 'bot_data.db')
+        db_path = get_db_path()
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
@@ -257,7 +268,7 @@ def should_send_reminder(last_activity: datetime) -> bool:
 def get_users_for_reminder() -> List[Dict]:
     """Получает пользователей, которым нужно отправить напоминание."""
     try:
-        db_path = os.path.join(os.getcwd(), 'bot_data.db')
+        db_path = get_db_path()
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
@@ -282,7 +293,7 @@ def get_users_for_reminder() -> List[Dict]:
 def update_user_activity(tg_id: str) -> bool:
     """Обновляет время последней активности пользователя."""
     try:
-        db_path = os.path.join(os.getcwd(), 'bot_data.db')
+        db_path = get_db_path()
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         
@@ -332,7 +343,7 @@ def cleanup_old_cache() -> None:
 def backup_local_db() -> bool:
     """Создает резервную копию локальной базы данных."""
     try:
-        db_path = os.path.join(os.getcwd(), 'bot_data.db')
+        db_path = get_db_path()
         backup_path = os.path.join(os.getcwd(), f'bot_data_backup_{datetime.now().strftime("%Y%m%d_%H%M%S")}.db')
         
         if os.path.exists(db_path):
@@ -352,7 +363,7 @@ def get_statistics() -> dict:
     Возвращает статистику по заявкам из локальной базы данных.
     """
     try:
-        db_path = os.path.join(os.getcwd(), 'bot_data.db')
+        db_path = get_db_path()
         
         if not os.path.exists(db_path):
             return {"error": "База данных не найдена"}
