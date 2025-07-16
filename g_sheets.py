@@ -106,10 +106,25 @@ def write_row(data: dict) -> bool:
         
         logger.info(f"Подготовленные данные для записи: {row_to_write}")
         
-        # Собираем итоговый список в правильном порядке, ориентируясь на заголовки
-        final_row = [row_to_write.get(header) for header in headers]
+        # ИСПРАВЛЕНИЕ: Собираем итоговый список в правильном порядке
+        # Создаём обратный маппинг: заголовок -> значение
+        final_row = []
+        for header in headers:
+            # Ищем соответствующую константу для этого заголовка
+            value = ''
+            for const_value, data_value in row_to_write.items():
+                if const_value == header:
+                    value = data_value or ''  # Заменяем None на пустую строку
+                    break
+            final_row.append(value)
         
-        logger.info(f"Финальная строка для записи: {final_row}")
+        logger.info(f"Заголовки ({len(headers)}): {headers}")
+        logger.info(f"Финальная строка ({len(final_row)}): {final_row}")
+        
+        # Проверяем соответствие длин
+        if len(final_row) != len(headers):
+            logger.error(f"ОШИБКА: Длина строки ({len(final_row)}) не соответствует количеству заголовков ({len(headers)})")
+            return False
         
         api_response = sheet.append_row(final_row, value_input_option='USER_ENTERED')
         

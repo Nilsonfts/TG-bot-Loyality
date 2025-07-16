@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 import re
 import os
 
@@ -161,7 +161,12 @@ async def submit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     # --- ИЗМЕНЕНИЕ ЗДЕСЬ ---
     # Собираем данные в единый словарь для новой функции write_row
     data_to_write = context.user_data.copy() # Копируем все, что уже есть
-    data_to_write['submission_time'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    
+    # Московское время (+3 часа от UTC)
+    moscow_tz = timezone(timedelta(hours=3))
+    moscow_time = datetime.now(moscow_tz).strftime('%Y-%m-%d %H:%M:%S')
+    data_to_write['submission_time'] = moscow_time
+    
     data_to_write['tg_user_id'] = user_id
     data_to_write['status'] = 'На согласовании'  # Изменено с 'Заявка' на более понятный статус
     
