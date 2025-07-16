@@ -29,6 +29,7 @@ def format_admin_notification(row_data: dict, row_index: int) -> dict:
         card_number = row_data.get('card_number')
         category = row_data.get('category')
         issue_location = row_data.get('issue_location')
+        reason = row_data.get('reason', 'Не указана')  # Добавляем причину выдачи
         logger.info("Используем формат данных из context.user_data")
     else:
         # Данные из Google Sheets (с константами SheetCols)
@@ -39,6 +40,7 @@ def format_admin_notification(row_data: dict, row_index: int) -> dict:
         card_number = row_data.get(SheetCols.CARD_NUMBER_COL)
         category = row_data.get(SheetCols.CATEGORY_COL)
         issue_location = row_data.get(SheetCols.ISSUE_LOCATION_COL)
+        reason = row_data.get(SheetCols.REASON_COL, 'Не указана')  # Добавляем причину выдачи
         logger.info("Используем формат данных из Google Sheets")
     
     # Обрабатываем пустые значения
@@ -54,10 +56,11 @@ def format_admin_notification(row_data: dict, row_index: int) -> dict:
     amount_text = f"{amount_val}{'%' if card_type_str == 'Скидка' else ' ₽'}"
     
     text = (
-        f"🔔 <b>Новая заявка на согласование (№{row_index})</b> 🔔\n\n"
+        f"🔔 <b>Новая заявка на согласование (№{row_index + 1})</b> 🔔\n\n"
         f"<b>Инициатор:</b> {initiator_info}\n"
         f"<b>Владелец карты:</b> {owner_info}\n"
         f"<b>Номер карты:</b> <code>{card_number}</code>\n"
+        f"<b>Причина выдачи:</b> {reason}\n"
         f"<b>Сумма/Скидка:</b> {amount_text}\n"
         f"<b>Статья:</b> {category}\n"
         f"<b>Город/Бар:</b> {issue_location}\n\n"
@@ -82,7 +85,7 @@ async def approve_request(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     
     try:
         row_index = int(query.data.split(':')[1])
-        logger.info(f"Одобрение заявки №{row_index}")
+        logger.info(f"Одобрение заявки №{row_index + 1} (row_index={row_index})")
     except (IndexError, ValueError):
         logger.error(f"Ошибка парсинга callback_data: {query.data}")
         await query.edit_message_text("Ошибка: неверный формат ID заявки.", reply_markup=None)
@@ -124,18 +127,39 @@ async def approve_request(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         card_number = row_data.get(SheetCols.CARD_NUMBER_COL, "Не указан")
         amount = row_data.get(SheetCols.AMOUNT_COL, "Не указана")
         
+        # Вычисляем ближайший четверг для активации
+        from datetime import datetime, timedelta
+        
+        # Получаем данные администратора, который одобрил
+        admin_user = query.from_user
+        admin_name = f"{admin_user.first_name} {admin_user.last_name or ''}".strip()
+        if not admin_name:
+            admin_name = admin_user.username or "Руководитель"
+        
+        # Вычисляем ближайший четверг
+        today = datetime.now()
+        days_until_thursday = (3 - today.weekday()) % 7  # 3 = четверг (понедельник = 0)
+        if days_until_thursday == 0 and today.hour >= 22:  # Если сегодня четверг после 22:00
+            days_until_thursday = 7  # Следующий четверг
+        elif days_until_thursday == 0:  # Если сегодня четверг до 22:00
+            days_until_thursday = 0  # Сегодня вечером
+        
+        next_thursday = today + timedelta(days=days_until_thursday)
+        thursday_date = next_thursday.strftime("%d.%m.%Y")
+        
         # Отправляем уведомление пользователю
         await context.bot.send_message(
             chat_id=tg_id,
             text=(
-                f"🎉 <b>Заявка одобрена!</b>\n\n"
+                f"🎉 <b>Заявка одобрена руководителем!</b>\n\n"
                 f"📋 <b>Детали заявки:</b>\n"
                 f"👤 Владелец карты: <b>{owner_name}</b>\n"
                 f"💳 Номер карты: <code>{card_number}</code>\n"
                 f"💰 Сумма/Скидка: <b>{amount}</b>\n\n"
-                f"✅ <b>Ваша заявка была успешно одобрена!</b>\n"
-                f"📞 Карта будет оформлена в ближайшее время.\n\n"
-                f"📬 <i>Спасибо за использование нашего сервиса!</i>"
+                f"✅ <b>Согласовано:</b> {admin_name}\n"
+                f"📅 <b>Активация:</b> {thursday_date} (четверг) после 22:00\n\n"
+                f"ℹ️ <i>Карта будет активирована автоматически в указанную дату.\n"
+                f"До этого времени средства недоступны для использования.</i>"
             ),
             parse_mode=ParseMode.HTML
         )
@@ -164,7 +188,7 @@ async def reject_request_start(update: Update, context: ContextTypes.DEFAULT_TYP
 
     try:
         row_index = int(query.data.split(':')[1])
-        logger.info(f"Начинаем отклонение заявки №{row_index}")
+        logger.info(f"Начинаем отклонение заявки №{row_index + 1} (row_index={row_index})")
     except (IndexError, ValueError):
         logger.error(f"Ошибка парсинга callback_data: {query.data}")
         await query.edit_message_text("Ошибка: неверный формат ID заявки.", reply_markup=None)
@@ -181,7 +205,7 @@ async def reject_request_start(update: Update, context: ContextTypes.DEFAULT_TYP
     
     # Отправляем запрос причины
     await query.message.reply_text(
-        f"📝 Пожалуйста, введите причину отказа для заявки №{row_index}:\n\n"
+        f"📝 Пожалуйста, введите причину отказа для заявки №{row_index + 1}:\n\n"
         "💡 <i>Укажите конкретную причину, которая поможет заявителю исправить ошибки в будущем.</i>",
         parse_mode=ParseMode.HTML
     )
