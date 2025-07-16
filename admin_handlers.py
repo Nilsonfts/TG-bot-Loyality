@@ -109,13 +109,6 @@ async def approve_request(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     else:
         logger.warning(f"Не удалось обновить поле одобрения для заявки №{row_index}")
 
-    # Обновляем сообщение админа
-    await query.edit_message_text(
-        query.message.text_html + "\n\n<b>Статус: ✅ ОДОБРЕНО</b>",
-        parse_mode=ParseMode.HTML,
-        reply_markup=None
-    )
-
     # Получаем данные строки для уведомления пользователя
     row_data = g_sheets.get_row_data(row_index)
     tg_id = row_data.get(SheetCols.TG_ID) if row_data else None
@@ -128,17 +121,33 @@ async def approve_request(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     try:
         owner_name = f"{row_data.get(SheetCols.OWNER_FIRST_NAME_COL, '')} {row_data.get(SheetCols.OWNER_LAST_NAME_COL, '')}".strip() or "Не указано"
+        card_number = row_data.get(SheetCols.CARD_NUMBER_COL, "Не указан")
+        amount = row_data.get(SheetCols.AMOUNT_COL, "Не указана")
+        
         # Отправляем уведомление пользователю
         await context.bot.send_message(
             chat_id=tg_id,
             text=(
                 f"🎉 <b>Заявка одобрена!</b>\n\n"
-                f"Ваша заявка на карту для <b>{owner_name}</b> была успешно одобрена.\n\n"
-                "✅ Карта будет оформлена в ближайшее время."
+                f"📋 <b>Детали заявки:</b>\n"
+                f"👤 Владелец карты: <b>{owner_name}</b>\n"
+                f"💳 Номер карты: <code>{card_number}</code>\n"
+                f"💰 Сумма/Скидка: <b>{amount}</b>\n\n"
+                f"✅ <b>Ваша заявка была успешно одобрена!</b>\n"
+                f"📞 Карта будет оформлена в ближайшее время.\n\n"
+                f"📬 <i>Спасибо за использование нашего сервиса!</i>"
             ),
             parse_mode=ParseMode.HTML
         )
         logger.info(f"Уведомление об одобрении отправлено пользователю {tg_id}")
+        
+        # Подтверждение админу о доставке
+        user_tag = row_data.get(SheetCols.TG_TAG, "неизвестно")
+        await query.edit_message_text(
+            query.message.text_html + f"\n\n<b>Статус: ✅ ОДОБРЕНО</b>\n📬 <i>Уведомление доставлено пользователю {user_tag}</i>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=None
+        )
     except Exception as e:
         logger.error(f"Ошибка отправки уведомления пользователю {tg_id}: {e}")
         boss_id = os.getenv("BOSS_ID")
@@ -201,9 +210,10 @@ async def reject_request_reason(update: Update, context: ContextTypes.DEFAULT_TY
     if status_updated and reason_updated:
         logger.info(f"Статус и причина для заявки №{row_index} успешно обновлены")
         await update.message.reply_text(
-            f"✅ Заявка №{row_index} отклонена.\n"
-            f"📝 Причина: {reason}\n\n"
-            "🔔 Уведомление отправлено заявителю."
+            f"✅ <b>Заявка №{row_index} отклонена</b>\n\n"
+            f"📝 <b>Причина:</b> {reason}\n\n"
+            f"🔔 <i>Уведомление будет отправлено заявителю...</i>",
+            parse_mode=ParseMode.HTML
         )
         
         # Получаем данные для уведомления пользователя
@@ -212,19 +222,37 @@ async def reject_request_reason(update: Update, context: ContextTypes.DEFAULT_TY
             try:
                 user_id = row_data[SheetCols.TG_ID]
                 owner_name = f"{row_data.get(SheetCols.OWNER_FIRST_NAME_COL, '')} {row_data.get(SheetCols.OWNER_LAST_NAME_COL, '')}".strip()
+                card_number = row_data.get(SheetCols.CARD_NUMBER_COL, "Не указан")
                 
                 # Отправляем уведомление пользователю
                 await context.bot.send_message(
                     chat_id=user_id,
                     text=(
                         f"😔 <b>Заявка отклонена</b>\n\n"
-                        f"К сожалению, ваша заявка на карту для <b>{owner_name}</b> была отклонена.\n\n"
-                        f"📝 <b>Причина:</b> {reason}\n\n"
-                        f"💡 <i>Вы можете подать новую заявку, исправив указанные замечания.</i>"
+                        f"📋 <b>Детали заявки:</b>\n"
+                        f"👤 Владелец карты: <b>{owner_name}</b>\n"
+                        f"💳 Номер карты: <code>{card_number}</code>\n\n"
+                        f"❌ <b>К сожалению, ваша заявка была отклонена.</b>\n\n"
+                        f"📝 <b>Причина отклонения:</b>\n"
+                        f"<i>{reason}</i>\n\n"
+                        f"� <b>Что делать дальше?</b>\n"
+                        f"• Изучите причину отклонения\n"
+                        f"• Исправьте указанные замечания\n"
+                        f"• Подайте новую заявку\n\n"
+                        f"💡 <i>Мы всегда готовы помочь! Обращайтесь, если есть вопросы.</i>"
                     ),
                     parse_mode=ParseMode.HTML
                 )
                 logger.info(f"Уведомление об отклонении отправлено пользователю {user_id}")
+                
+                # Подтверждение админу о доставке
+                user_tag = row_data.get(SheetCols.TG_TAG, "неизвестно")
+                await update.message.reply_text(
+                    f"📬 <b>Уведомление доставлено!</b>\n\n"
+                    f"👤 Пользователь: {user_tag}\n"
+                    f"✅ Уведомление об отклонении заявки №{row_index} успешно отправлено",
+                    parse_mode=ParseMode.HTML
+                )
                 
             except Exception as e:
                 logger.error(f"Ошибка отправки уведомления пользователю {user_id}: {e}")
