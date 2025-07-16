@@ -88,8 +88,8 @@ def write_row(data: dict) -> bool:
             SheetCols.FIO_INITIATOR: data.get('initiator_fio', ''),
             SheetCols.JOB_TITLE: data.get('initiator_job_title', ''),
             SheetCols.PHONE_INITIATOR: data.get('initiator_phone', ''),
-            SheetCols.OWNER_LAST_NAME_COL: data.get('owner_last_name', ''),
             SheetCols.OWNER_FIRST_NAME_COL: data.get('owner_first_name', ''),
+            SheetCols.OWNER_LAST_NAME_COL: data.get('owner_last_name', ''),
             SheetCols.REASON_COL: data.get('reason', ''),
             SheetCols.CARD_TYPE_COL: data.get('card_type', ''),
             SheetCols.CARD_NUMBER_COL: data.get('card_number', ''),
@@ -98,7 +98,10 @@ def write_row(data: dict) -> bool:
             SheetCols.FREQUENCY_COL: data.get('frequency', ''),
             SheetCols.ISSUE_LOCATION_COL: data.get('issue_location', ''),
             SheetCols.STATUS_COL: data.get('status', ''),
-            SheetCols.REASON_REJECT: data.get('reason_reject', '')  # Добавляем поле для причины отказа
+            SheetCols.APPROVAL_STATUS: '',  # Будет заполнено при одобрении
+            SheetCols.START_DATE: '',  # Будет заполнено при активации
+            SheetCols.ACTIVATED: '',  # Будет заполнено при активации
+            SheetCols.REASON_REJECT: data.get('reason_reject', '')  # Причина отказа при отклонении
         }
         
         logger.info(f"Подготовленные данные для записи: {row_to_write}")
@@ -185,10 +188,12 @@ def get_cards_from_sheet(user_id: str = None) -> list:
 def update_cell_by_row(row_index: int, column_name: str, new_value: str) -> bool:
     """
     Обновляет конкретную ячейку в строке по индексу строки и названию столбца.
-    row_index: номер строки (начиная с 1, где 1 - заголовки)
+    row_index: номер записи в данных (начиная с 0)
     column_name: название столбца из SheetCols
     new_value: новое значение для ячейки
     """
+    logger.info(f"update_cell_by_row вызвана: row_index={row_index}, column_name='{column_name}', new_value='{new_value}'")
+    
     client = get_gspread_client()
     if not client: 
         logger.error("Не удалось получить клиент Google Sheets")
@@ -202,19 +207,28 @@ def update_cell_by_row(row_index: int, column_name: str, new_value: str) -> bool
     try:
         # Получаем заголовки для определения номера столбца
         headers = sheet.row_values(1)
+        logger.info(f"Заголовки таблицы: {headers}")
+        
         if column_name not in headers:
             logger.error(f"Столбец '{column_name}' не найден в заголовках")
+            logger.error(f"Доступные заголовки: {headers}")
             return False
         
         column_index = headers.index(column_name) + 1  # +1 для gspread (1-based indexing)
         
+        # Вычисляем номер строки в Google Sheets (row_index + 2, т.к. +1 для заголовка и +1 для 1-based indexing)
+        sheet_row_number = row_index + 2
+        
+        logger.info(f"Обновляем ячейку: строка {sheet_row_number}, столбец {column_index} ('{column_name}')")
+        
         # Обновляем ячейку
-        sheet.update_cell(row_index + 1, column_index, new_value)  # +1 т.к. row_index начинается с 0, а первая строка - заголовки
-        logger.info(f"Успешно обновлена ячейка [{row_index + 1}, {column_index}] = '{new_value}'")
+        sheet.update_cell(sheet_row_number, column_index, new_value)
+        logger.info(f"✅ Успешно обновлена ячейка [{sheet_row_number}, {column_index}] = '{new_value}'")
         return True
         
     except Exception as e:
-        logger.error(f"Ошибка при обновлении ячейки: {e}", exc_info=True)
+        logger.error(f"❌ Ошибка при обновлении ячейки: {e}", exc_info=True)
+        logger.error(f"Параметры: row_index={row_index}, column_name='{column_name}', new_value='{new_value}'")
         return False
 
 def get_row_data(row_index: int) -> dict:

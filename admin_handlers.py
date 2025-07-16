@@ -94,6 +94,11 @@ async def approve_request(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if success:
         logger.info(f"Статус заявки №{row_index} успешно обновлен на 'Одобрено'")
         
+        # Также обновляем поле одобрения
+        approval_success = g_sheets.update_cell_by_row(row_index, SheetCols.APPROVAL_STATUS, "Одобрено")
+        if approval_success:
+            logger.info(f"Поле одобрения для заявки №{row_index} обновлено")
+        
         # Обновляем сообщение админа
         await query.edit_message_text(
             query.message.text_html + "\n\n<b>Статус: ✅ ОДОБРЕНО</b>", 
@@ -188,6 +193,7 @@ async def reject_request_reason(update: Update, context: ContextTypes.DEFAULT_TY
     reason_updated = g_sheets.update_cell_by_row(row_index, SheetCols.REASON_REJECT, reason)
     
     if status_updated and reason_updated:
+        logger.info(f"Статус и причина для заявки №{row_index} успешно обновлены")
         await update.message.reply_text(
             f"✅ Заявка №{row_index} отклонена.\n"
             f"📝 Причина: {reason}\n\n"
