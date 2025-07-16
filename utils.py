@@ -219,6 +219,21 @@ def get_user_from_local_db(tg_id: str) -> Optional[Dict]:
         logger.error(f"Ошибка при получении пользователя из локальной БД: {e}")
         return None
 
+def get_initiator_from_local_db(tg_id: str) -> Optional[Dict]:
+    """Получение данных инициатора из локальной БД в нужном формате для формы."""
+    user_data = get_user_from_local_db(tg_id)
+    if not user_data:
+        return None
+    
+    # Преобразуем данные в формат, который ожидает форма
+    return {
+        "initiator_username": user_data.get('username', ''),
+        "initiator_email": user_data.get('email', ''),
+        "initiator_fio": user_data.get('fio', ''),
+        "initiator_job_title": user_data.get('job_title', ''),
+        "initiator_phone": user_data.get('phone', ''),
+    }
+
 def search_applications_local(query: str, search_type: str = 'name', user_id: str = None) -> List[Dict]:
     """Быстрый поиск заявок в локальной БД."""
     try:

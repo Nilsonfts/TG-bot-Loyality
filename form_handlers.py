@@ -46,6 +46,18 @@ async def start_form_conversation(update: Update, context: ContextTypes.DEFAULT_
     user_id = str(update.effective_user.id)
 
     initiator_data = g_sheets.get_initiator_data(user_id)
+    
+    # Если данных нет в Google Sheets, пробуем получить из локальной БД
+    if not initiator_data:
+        logger.info(f"Данные инициатора не найдены в Google Sheets для пользователя {user_id}, проверяем локальную БД")
+        try:
+            utils.init_local_db()  # Убеждаемся что БД инициализирована
+            initiator_data = utils.get_initiator_from_local_db(user_id)
+            if initiator_data:
+                logger.info(f"Данные инициатора найдены в локальной БД: {initiator_data}")
+        except Exception as e:
+            logger.error(f"Ошибка получения данных из локальной БД: {e}")
+    
     if not initiator_data:
         await update.message.reply_text("Ошибка: не удалось найти ваши данные. Пожалуйста, пройдите регистрацию заново.")
         return await navigation_handlers.end_conversation_and_show_menu(update, context)
@@ -156,6 +168,13 @@ async def submit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     # Убеждаемся, что username указан корректно
     if not data_to_write.get('initiator_username'):
         data_to_write['initiator_username'] = f"@{query.from_user.username}" if query.from_user.username else '–'
+
+    # Детальное логирование данных перед записью
+    logger.info(f"=== ДАННЫЕ ДЛЯ ЗАПИСИ В GOOGLE SHEETS ===")
+    logger.info(f"Пользователь: {user_id}")
+    for key, value in data_to_write.items():
+        logger.info(f"  {key}: '{value}'")
+    logger.info(f"==========================================")
 
     # Инициализируем локальную БД если еще не создана
     utils.init_local_db()
