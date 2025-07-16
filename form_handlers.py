@@ -44,30 +44,44 @@ async def start_form_conversation(update: Update, context: ContextTypes.DEFAULT_
     """Начинает диалог подачи заявки для УЖЕ ЗАРЕГИСТРИРОВАННОГО пользователя."""
     context.user_data.clear()
     user_id = str(update.effective_user.id)
+    
+    logger.info(f"🔄 Начинаем подачу заявки для пользователя {user_id}")
 
     initiator_data = g_sheets.get_initiator_data(user_id)
+    logger.info(f"📊 Результат get_initiator_data: {initiator_data}")
     
     # Если данных нет в Google Sheets, пробуем получить из локальной БД
     if not initiator_data:
-        logger.info(f"Данные инициатора не найдены в Google Sheets для пользователя {user_id}, проверяем локальную БД")
+        logger.info(f"📋 Данные инициатора не найдены в Google Sheets для пользователя {user_id}, проверяем локальную БД")
         try:
             utils.init_local_db()  # Убеждаемся что БД инициализирована
             initiator_data = utils.get_initiator_from_local_db(user_id)
             if initiator_data:
-                logger.info(f"Данные инициатора найдены в локальной БД: {initiator_data}")
+                logger.info(f"✅ Данные инициатора найдены в локальной БД: {initiator_data}")
+            else:
+                logger.warning(f"❌ Данные инициатора НЕ найдены в локальной БД")
         except Exception as e:
-            logger.error(f"Ошибка получения данных из локальной БД: {e}")
+            logger.error(f"💥 Ошибка получения данных из локальной БД: {e}")
     
     if not initiator_data:
-        await update.message.reply_text("Ошибка: не удалось найти ваши данные. Пожалуйста, пройдите регистрацию заново.")
+        logger.error(f"🚫 Данные пользователя {user_id} не найдены ни в Google Sheets, ни в локальной БД")
+        await update.message.reply_text(
+            "❌ <b>Ошибка:</b> не удалось найти ваши данные.\n\n"
+            "🔄 Пожалуйста, пройдите регистрацию заново через главное меню.",
+            parse_mode=ParseMode.HTML
+        )
         return await navigation_handlers.end_conversation_and_show_menu(update, context)
 
+    logger.info(f"✅ Данные инициатора найдены, добавляем в context.user_data")
     context.user_data.update(initiator_data)
+    
     await update.message.reply_text(
-        "Начинаем подачу новой заявки.\nВведите <b>Фамилию</b> владельца карты.",
+        "📝 <b>Начинаем подачу новой заявки</b>\n\n"
+        "Введите <b>Фамилию</b> владельца карты:",
         parse_mode=ParseMode.HTML,
         reply_markup=ReplyKeyboardRemove()
     )
+    logger.info(f"📤 Сообщение отправлено, переходим к состоянию OWNER_LAST_NAME")
     return OWNER_LAST_NAME
 
 async def get_owner_last_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:

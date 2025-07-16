@@ -201,38 +201,67 @@ def save_application_to_local_db(app_data: Dict) -> Optional[int]:
 
 def get_user_from_local_db(tg_id: str) -> Optional[Dict]:
     """Получение данных пользователя из локальной БД."""
+    logger.info(f"🔍 Ищем пользователя в локальной БД: tg_id={tg_id}")
+    
     try:
         db_path = get_db_path()
+        logger.info(f"📂 Путь к БД: {db_path}")
+        
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
+        # Сначала проверим, сколько пользователей в таблице
+        cursor.execute('SELECT COUNT(*) as count FROM users')
+        count_result = cursor.fetchone()
+        logger.info(f"📊 Всего пользователей в БД: {count_result['count']}")
+        
+        # Теперь ищем конкретного пользователя
         cursor.execute('SELECT * FROM users WHERE tg_id = ?', (tg_id,))
         row = cursor.fetchone()
-        conn.close()
         
         if row:
-            return dict(row)
+            result = dict(row)
+            logger.info(f"✅ Пользователь найден в локальной БД: {result}")
+            conn.close()
+            return result
+        else:
+            logger.warning(f"❌ Пользователь с tg_id={tg_id} не найден в локальной БД")
+            
+            # Покажем несколько записей для отладки
+            cursor.execute('SELECT tg_id, fio FROM users LIMIT 5')
+            sample_users = cursor.fetchall()
+            logger.info(f"🔍 Примеры пользователей в БД: {[dict(u) for u in sample_users]}")
+            
+        conn.close()
         return None
         
     except Exception as e:
-        logger.error(f"Ошибка при получении пользователя из локальной БД: {e}")
+        logger.error(f"💥 Ошибка при получении пользователя из локальной БД: {e}")
         return None
 
 def get_initiator_from_local_db(tg_id: str) -> Optional[Dict]:
     """Получение данных инициатора из локальной БД в нужном формате для формы."""
+    logger.info(f"🔍 Получаем данные инициатора из локальной БД для tg_id: {tg_id}")
+    
     user_data = get_user_from_local_db(tg_id)
     if not user_data:
+        logger.warning(f"❌ Данные для tg_id {tg_id} не найдены в локальной БД")
         return None
     
+    logger.info(f"✅ Найдены данные в локальной БД: {user_data}")
+    
     # Преобразуем данные в формат, который ожидает форма
-    return {
+    result = {
         "initiator_username": user_data.get('username', ''),
         "initiator_email": user_data.get('email', ''),
         "initiator_fio": user_data.get('fio', ''),
         "initiator_job_title": user_data.get('job_title', ''),
         "initiator_phone": user_data.get('phone', ''),
     }
+    
+    logger.info(f"📋 Возвращаем преобразованные данные: {result}")
+    return result
 
 def search_applications_local(query: str, search_type: str = 'name', user_id: str = None) -> List[Dict]:
     """Быстрый поиск заявок в локальной БД."""

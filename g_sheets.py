@@ -164,10 +164,26 @@ def is_user_registered(user_id: str) -> bool:
     return False
 
 def find_initiator_in_sheet_from_api(user_id: str):
+    logger.info(f"🔍 Ищем инициатора с user_id: {user_id}")
     all_records = get_sheet_data()
+    logger.info(f"📊 Получено {len(all_records)} записей из таблицы")
+    
     user_data = None
-    for row in reversed(all_records):
-        if str(row.get(SheetCols.TG_ID)) == user_id and row.get(SheetCols.FIO_INITIATOR):
+    found_matching_ids = []
+    
+    for i, row in enumerate(reversed(all_records)):
+        row_tg_id = str(row.get(SheetCols.TG_ID))
+        row_fio = row.get(SheetCols.FIO_INITIATOR)
+        
+        # Логируем каждую запись для отладки
+        if i < 5:  # Первые 5 записей для отладки
+            logger.info(f"  Запись {i}: TG_ID='{row_tg_id}', FIO='{row_fio}'")
+        
+        if row_tg_id == user_id:
+            found_matching_ids.append(f"Индекс {i}: TG_ID={row_tg_id}, FIO='{row_fio}'")
+            
+        if row_tg_id == user_id and row_fio:
+            logger.info(f"✅ Найден инициатор: TG_ID={row_tg_id}, FIO={row_fio}")
             user_data = {
                 "initiator_username": row.get(SheetCols.TG_TAG),
                 "initiator_email": row.get(SheetCols.EMAIL),
@@ -175,7 +191,16 @@ def find_initiator_in_sheet_from_api(user_id: str):
                 "initiator_job_title": row.get(SheetCols.JOB_TITLE),
                 "initiator_phone": row.get(SheetCols.PHONE_INITIATOR),
             }
+            logger.info(f"📋 Возвращаем данные: {user_data}")
             break
+    
+    if not user_data:
+        logger.warning(f"❌ Инициатор с user_id {user_id} не найден")
+        if found_matching_ids:
+            logger.info(f"🔍 Найдены записи с совпадающим TG_ID, но без FIO: {found_matching_ids}")
+        else:
+            logger.info(f"🔍 Записей с TG_ID {user_id} вообще не найдено")
+    
     return user_data
 
 def get_initiator_data(user_id: str):
