@@ -139,8 +139,10 @@ def main() -> None:
     application.add_handler(CallbackQueryHandler(settings_handlers.handle_pagination, r"^paginate_"))
     application.add_handler(CallbackQueryHandler(settings_handlers.noop_callback, r"^noop$"))
 
-    # Обработчики админских колбэков
+    # Обработчики админских колбэков (отдельно от ConversationHandler для корректной работы)
     application.add_handler(CallbackQueryHandler(admin_handlers.approve_request, f"^{constants.CALLBACK_APPROVE_PREFIX}"))
+    
+    # ВАЖНО: CallbackQueryHandler для reject должен быть в ConversationHandler выше!
 
     # Добавляем периодические задачи
     job_queue = application.job_queue

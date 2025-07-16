@@ -81,23 +81,24 @@ def write_row(data: dict) -> bool:
 
         # Собираем данные в словарь в соответствии с константами
         row_to_write = {
-            SheetCols.TIMESTAMP: data.get('submission_time'),
-            SheetCols.TG_ID: data.get('tg_user_id'),
-            SheetCols.TG_TAG: data.get('initiator_username'),
-            SheetCols.EMAIL: data.get('initiator_email'),
-            SheetCols.FIO_INITIATOR: data.get('initiator_fio'),
-            SheetCols.JOB_TITLE: data.get('initiator_job_title'),
-            SheetCols.PHONE_INITIATOR: data.get('initiator_phone'),
-            SheetCols.OWNER_LAST_NAME_COL: data.get('owner_last_name'),
-            SheetCols.OWNER_FIRST_NAME_COL: data.get('owner_first_name'),
-            SheetCols.REASON_COL: data.get('reason'),
-            SheetCols.CARD_TYPE_COL: data.get('card_type'),
-            SheetCols.CARD_NUMBER_COL: data.get('card_number'),
-            SheetCols.CATEGORY_COL: data.get('category'),
-            SheetCols.AMOUNT_COL: data.get('amount'),
-            SheetCols.FREQUENCY_COL: data.get('frequency'),
-            SheetCols.ISSUE_LOCATION_COL: data.get('issue_location'),
-            SheetCols.STATUS_COL: data.get('status')
+            SheetCols.TIMESTAMP: data.get('submission_time', ''),
+            SheetCols.TG_ID: data.get('tg_user_id', ''),
+            SheetCols.TG_TAG: data.get('initiator_username', ''),
+            SheetCols.EMAIL: data.get('initiator_email', ''),
+            SheetCols.FIO_INITIATOR: data.get('initiator_fio', ''),
+            SheetCols.JOB_TITLE: data.get('initiator_job_title', ''),
+            SheetCols.PHONE_INITIATOR: data.get('initiator_phone', ''),
+            SheetCols.OWNER_LAST_NAME_COL: data.get('owner_last_name', ''),
+            SheetCols.OWNER_FIRST_NAME_COL: data.get('owner_first_name', ''),
+            SheetCols.REASON_COL: data.get('reason', ''),
+            SheetCols.CARD_TYPE_COL: data.get('card_type', ''),
+            SheetCols.CARD_NUMBER_COL: data.get('card_number', ''),
+            SheetCols.CATEGORY_COL: data.get('category', ''),
+            SheetCols.AMOUNT_COL: data.get('amount', ''),
+            SheetCols.FREQUENCY_COL: data.get('frequency', ''),
+            SheetCols.ISSUE_LOCATION_COL: data.get('issue_location', ''),
+            SheetCols.STATUS_COL: data.get('status', ''),
+            SheetCols.REASON_REJECT: data.get('reason_reject', '')  # Добавляем поле для причины отказа
         }
         
         logger.info(f"Подготовленные данные для записи: {row_to_write}")

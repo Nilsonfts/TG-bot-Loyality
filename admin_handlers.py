@@ -74,15 +74,6 @@ def format_admin_notification(row_data: dict, row_index: int) -> dict:
     ])
     
     return {"text": text, "reply_markup": keyboard}
-    
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("✅ Одобрить", callback_data=f"{CALLBACK_APPROVE_PREFIX}{row_index}"),
-            InlineKeyboardButton("❌ Отклонить", callback_data=f"{CALLBACK_REJECT_PREFIX}{row_index}")
-        ]
-    ])
-    
-    return {"text": text, "reply_markup": keyboard}
 
 async def approve_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обрабатывает одобрение заявки."""
@@ -91,29 +82,60 @@ async def approve_request(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     
     try:
         row_index = int(query.data.split(':')[1])
+        logger.info(f"Одобрение заявки №{row_index}")
     except (IndexError, ValueError):
+        logger.error(f"Ошибка парсинга callback_data: {query.data}")
         await query.edit_message_text("Ошибка: неверный формат ID заявки.", reply_markup=None)
         return
 
+    # Обновляем статус в Google Sheets
     success = g_sheets.update_cell_by_row(row_index, SheetCols.STATUS_COL, "Одобрено")
     
     if success:
-        await query.edit_message_text(query.message.text_html + "\n\n<b>Статус: ✅ ОДОБРЕНО</b>", parse_mode=ParseMode.HTML, reply_markup=None)
+        logger.info(f"Статус заявки №{row_index} успешно обновлен на 'Одобрено'")
         
+        # Обновляем сообщение админа
+        await query.edit_message_text(
+            query.message.text_html + "\n\n<b>Статус: ✅ ОДОБРЕНО</b>", 
+            parse_mode=ParseMode.HTML, 
+            reply_markup=None
+        )
+        
+        # Получаем данные строки для уведомления пользователя
         row_data = g_sheets.get_row_data(row_index)
         if row_data and row_data.get(SheetCols.TG_ID):
             try:
-                owner_name = f"{row_data.get(SheetCols.OWNER_FIRST_NAME_COL)} {row_data.get(SheetCols.OWNER_LAST_NAME_COL)}"
+                user_id = row_data[SheetCols.TG_ID]
+                owner_name = f"{row_data.get(SheetCols.OWNER_FIRST_NAME_COL, '')} {row_data.get(SheetCols.OWNER_LAST_NAME_COL, '')}".strip()
+                
+                # Отправляем уведомление пользователю
                 await context.bot.send_message(
-                    chat_id=row_data[SheetCols.TG_ID],
-                    text=f"🎉 Ваша заявка на карту для <b>{owner_name}</b> была <b>одобрена</b>.",
+                    chat_id=user_id,
+                    text=f"🎉 <b>Заявка одобрена!</b>\n\nВаша заявка на карту для <b>{owner_name}</b> была успешно одобрена.\n\n✅ Карта будет оформлена в ближайшее время.",
                     parse_mode=ParseMode.HTML
                 )
+                logger.info(f"Уведомление об одобрении отправлено пользователю {user_id}")
+                
             except Exception as e:
-                logger.error(f"Failed to send approval notification to user {row_data[SheetCols.TG_ID]}: {e}")
+                logger.error(f"Ошибка отправки уведомления пользователю {user_id}: {e}")
+                
+                # Уведомляем босса об ошибке
                 boss_id = os.getenv("BOSS_ID")
                 if boss_id:
-                    await context.bot.send_message(boss_id, f"Не удалось уведомить пользователя {row_data[SheetCols.TG_TAG]} об одобрении заявки №{row_index}.")
+                    await context.bot.send_message(
+                        boss_id, 
+                        f"⚠️ Не удалось уведомить пользователя {row_data.get(SheetCols.TG_TAG, 'неизвестно')} об одобрении заявки №{row_index}.\n\nОшибка: {str(e)}"
+                    )
+        else:
+            logger.error(f"Не найдены данные для строки {row_index} или отсутствует TG_ID")
+            
+    else:
+        logger.error(f"Не удалось обновить статус заявки №{row_index}")
+        await query.edit_message_text(
+            query.message.text_html + "\n\n<b>❌ ОШИБКА: Не удалось обновить статус</b>", 
+            parse_mode=ParseMode.HTML, 
+            reply_markup=None
+        )
 
 async def reject_request_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Начинает процесс отклонения, запрашивая причину."""
@@ -122,45 +144,94 @@ async def reject_request_start(update: Update, context: ContextTypes.DEFAULT_TYP
 
     try:
         row_index = int(query.data.split(':')[1])
+        logger.info(f"Начинаем отклонение заявки №{row_index}")
     except (IndexError, ValueError):
+        logger.error(f"Ошибка парсинга callback_data: {query.data}")
         await query.edit_message_text("Ошибка: неверный формат ID заявки.", reply_markup=None)
         return ConversationHandler.END
         
     context.user_data['admin_action_row_index'] = row_index
     
-    await query.edit_message_text(query.message.text_html + "\n\n⏳ Ожидание...", parse_mode=ParseMode.HTML, reply_markup=None)
-    await query.message.reply_text(f"Пожалуйста, введите причину отказа для заявки №{row_index}.")
+    # Обновляем исходное сообщение
+    await query.edit_message_text(
+        query.message.text_html + "\n\n⏳ Ожидание причины отклонения...", 
+        parse_mode=ParseMode.HTML, 
+        reply_markup=None
+    )
+    
+    # Отправляем запрос причины
+    await query.message.reply_text(
+        f"📝 Пожалуйста, введите причину отказа для заявки №{row_index}:\n\n"
+        "💡 <i>Укажите конкретную причину, которая поможет заявителю исправить ошибки в будущем.</i>",
+        parse_mode=ParseMode.HTML
+    )
     
     return AWAIT_REJECT_REASON
 
 async def reject_request_reason(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Получает причину, обновляет статус и уведомляет пользователя."""
-    reason = update.message.text
+    reason = update.message.text.strip()
     row_index = context.user_data.get('admin_action_row_index')
     
     if not row_index:
-        await update.message.reply_text("Произошла ошибка, не найден ID заявки. Попробуйте снова.")
+        await update.message.reply_text("❌ Произошла ошибка: не найден ID заявки. Попробуйте снова.")
         return ConversationHandler.END
+    
+    if not reason:
+        await update.message.reply_text("❌ Причина не может быть пустой. Введите причину отклонения:")
+        return AWAIT_REJECT_REASON
         
-    g_sheets.update_cell_by_row(row_index, SheetCols.STATUS_COL, "Отклонено")
-    g_sheets.update_cell_by_row(row_index, SheetCols.REASON_REJECT, reason)
+    logger.info(f"Отклоняем заявку №{row_index} с причиной: {reason}")
     
-    await update.message.reply_text(f"Статус заявки №{row_index} обновлен на 'Отклонено'.")
+    # Обновляем статус и причину в Google Sheets
+    status_updated = g_sheets.update_cell_by_row(row_index, SheetCols.STATUS_COL, "Отклонено")
+    reason_updated = g_sheets.update_cell_by_row(row_index, SheetCols.REASON_REJECT, reason)
     
-    row_data = g_sheets.get_row_data(row_index)
-    if row_data and row_data.get(SheetCols.TG_ID):
-        try:
-            owner_name = f"{row_data.get(SheetCols.OWNER_FIRST_NAME_COL)} {row_data.get(SheetCols.OWNER_LAST_NAME_COL)}"
-            await context.bot.send_message(
-                chat_id=row_data[SheetCols.TG_ID],
-                text=f"😔 Ваша заявка на карту для <b>{owner_name}</b> была <b>отклонена</b>.\n\n<i>Причина:</i> {reason}",
-                parse_mode=ParseMode.HTML
-            )
-        except Exception as e:
-            logger.error(f"Failed to send rejection notification to user {row_data[SheetCols.TG_ID]}: {e}")
-            boss_id = os.getenv("BOSS_ID")
-            if boss_id:
-                await context.bot.send_message(boss_id, f"Не удалось уведомить пользователя {row_data[SheetCols.TG_TAG]} об отклонении заявки №{row_index}.")
+    if status_updated and reason_updated:
+        await update.message.reply_text(
+            f"✅ Заявка №{row_index} отклонена.\n"
+            f"📝 Причина: {reason}\n\n"
+            "🔔 Уведомление отправлено заявителю."
+        )
+        
+        # Получаем данные для уведомления пользователя
+        row_data = g_sheets.get_row_data(row_index)
+        if row_data and row_data.get(SheetCols.TG_ID):
+            try:
+                user_id = row_data[SheetCols.TG_ID]
+                owner_name = f"{row_data.get(SheetCols.OWNER_FIRST_NAME_COL, '')} {row_data.get(SheetCols.OWNER_LAST_NAME_COL, '')}".strip()
+                
+                # Отправляем уведомление пользователю
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=(
+                        f"😔 <b>Заявка отклонена</b>\n\n"
+                        f"К сожалению, ваша заявка на карту для <b>{owner_name}</b> была отклонена.\n\n"
+                        f"📝 <b>Причина:</b> {reason}\n\n"
+                        f"💡 <i>Вы можете подать новую заявку, исправив указанные замечания.</i>"
+                    ),
+                    parse_mode=ParseMode.HTML
+                )
+                logger.info(f"Уведомление об отклонении отправлено пользователю {user_id}")
+                
+            except Exception as e:
+                logger.error(f"Ошибка отправки уведомления пользователю {user_id}: {e}")
+                
+                # Уведомляем босса об ошибке
+                boss_id = os.getenv("BOSS_ID")
+                if boss_id:
+                    await context.bot.send_message(
+                        boss_id, 
+                        f"⚠️ Не удалось уведомить пользователя {row_data.get(SheetCols.TG_TAG, 'неизвестно')} об отклонении заявки №{row_index}.\n\nОшибка: {str(e)}"
+                    )
+        else:
+            logger.error(f"Не найдены данные для строки {row_index} или отсутствует TG_ID")
+    else:
+        logger.error(f"Ошибка обновления статуса/причины для заявки №{row_index}")
+        await update.message.reply_text(f"❌ Ошибка: не удалось обновить статус заявки №{row_index}")
 
-    context.user_data.clear()
+    # Очищаем данные
+    if 'admin_action_row_index' in context.user_data:
+        del context.user_data['admin_action_row_index']
+    
     return ConversationHandler.END

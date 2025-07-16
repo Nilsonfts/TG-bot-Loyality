@@ -152,6 +152,10 @@ async def submit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     data_to_write['submission_time'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     data_to_write['tg_user_id'] = user_id
     data_to_write['status'] = 'На согласовании'  # Изменено с 'Заявка' на более понятный статус
+    
+    # Убеждаемся, что username указан корректно
+    if not data_to_write.get('initiator_username'):
+        data_to_write['initiator_username'] = f"@{query.from_user.username}" if query.from_user.username else '–'
 
     # Инициализируем локальную БД если еще не создана
     utils.init_local_db()

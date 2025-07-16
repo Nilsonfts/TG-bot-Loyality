@@ -75,7 +75,7 @@ async def get_job_title_and_finish(update: Update, context: ContextTypes.DEFAULT
     data_to_write = {
         'submission_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         'tg_user_id': user_id,
-        'initiator_username': context.user_data.get('initiator_username', '–'),
+        'initiator_username': f"@{update.effective_user.username}" if update.effective_user.username else '–',
         'initiator_email': context.user_data.get('initiator_email'),
         'initiator_fio': context.user_data.get('initiator_fio'),
         'initiator_job_title': context.user_data.get('initiator_job_title'),
