@@ -3,6 +3,7 @@
 import logging
 import re
 from datetime import datetime
+import asyncio
 
 from telegram import Update, ReplyKeyboardRemove, KeyboardButton, ReplyKeyboardMarkup
 from telegram.constants import ParseMode
@@ -84,13 +85,13 @@ async def get_job_title_and_finish(update: Update, context: ContextTypes.DEFAULT
     }
 
     # Инициализируем локальную БД если еще не создана
-    utils.init_local_db()
+    await asyncio.to_thread(utils.init_local_db)
     
     # Сохраняем в локальную БД
-    local_success = utils.save_user_to_local_db(data_to_write)
+    local_success = await asyncio.to_thread(utils.save_user_to_local_db, data_to_write)
     
     # Сохраняем в Google Sheets
-    google_success = g_sheets.write_row(data_to_write)
+    google_success = await asyncio.to_thread(g_sheets.write_row, data_to_write)
 
     if google_success or local_success:
         success_msg = "🎉 <b>Регистрация успешно завершена!</b>\n\nТеперь вам доступны все функции бота."

@@ -4,6 +4,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 import re
 import os
+import asyncio
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
 from telegram.constants import ParseMode
@@ -47,15 +48,15 @@ async def start_form_conversation(update: Update, context: ContextTypes.DEFAULT_
     
     logger.info(f"🔄 Начинаем подачу заявки для пользователя {user_id}")
 
-    initiator_data = g_sheets.get_initiator_data(user_id)
+    initiator_data = await asyncio.to_thread(g_sheets.get_initiator_data, user_id)
     logger.info(f"📊 Результат get_initiator_data: {initiator_data}")
     
     # Если данных нет в Google Sheets, пробуем получить из локальной БД
     if not initiator_data:
         logger.info(f"📋 Данные инициатора не найдены в Google Sheets для пользователя {user_id}, проверяем локальную БД")
         try:
-            utils.init_local_db()  # Убеждаемся что БД инициализирована
-            initiator_data = utils.get_initiator_from_local_db(user_id)
+            await asyncio.to_thread(utils.init_local_db)  # Убеждаемся что БД инициализирована
+            initiator_data = await asyncio.to_thread(utils.get_initiator_from_local_db, user_id)
             if initiator_data:
                 logger.info(f"✅ Данные инициатора найдены в локальной БД: {initiator_data}")
             else:
@@ -196,51 +197,57 @@ async def submit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     logger.info(f"==========================================")
 
     # Инициализируем локальную БД если еще не создана
-    utils.init_local_db()
+    await asyncio.to_thread(utils.init_local_db)
     
     # Сохраняем в локальную БД
-    local_app_id = utils.save_application_to_local_db(data_to_write)
+    local_app_id = await asyncio.to_thread(utils.save_application_to_local_db, data_to_write)
     
     # Вызываем новую, "умную" функцию записи в Google Sheets
-    google_success = g_sheets.write_row(data_to_write)
+    google_success = await asyncio.to_thread(g_sheets.write_row, data_to_write)
 
     if google_success or local_app_id:
         if google_success:
             status_text = "\n\n<b>Статус:</b> ✅ Заявка успешно отправлена на согласование.\n\n" \
                          "📋 <i>Мы уведомим вас, как только заявка будет рассмотрена!</i>"
         else:
-            status_text = "\n\n<b>Статус:</b> ✅ Заявка сохранена локально и будет отправлена на согласование после синхронизации.\n\n" \
+            status_text = "\n\n<b>Статус:</b> ⚠️ Заявка сохранена локально, синхронизация с таблицей произойдет позже.\n\n" \
                          "📋 <i>Мы уведомим вас, как только заявка будет рассмотрена!</i>"
-        
-        # Уведомляем админа о новой заявке только если удалось сохранить в Google Sheets
-        if google_success:
-            boss_id = os.getenv("BOSS_ID")
-            if boss_id:
-                try:
-                    # ИСПРАВЛЕНИЕ: Получаем данные ПОСЛЕ добавления новой записи
-                    all_records = g_sheets.get_sheet_data()
+
+        # Уведомляем админа в любом случае — даже если Google Sheets недоступен
+        boss_id = os.getenv("BOSS_ID")
+        if boss_id:
+            try:
+                row_index = -1
+                action_id = None
+                if google_success:
+                    all_records = await asyncio.to_thread(g_sheets.get_sheet_data)
                     if all_records:
-                        # Новая запись - это последняя запись в массиве
-                        row_index = len(all_records) - 1  # Индекс последней записи (для get_row_data)
-                        logger.info(f"📊 Всего записей после добавления: {len(all_records)}, row_index для админа: {row_index}")
-                        
-                        notification = admin_handlers.format_admin_notification(data_to_write, row_index)
-                        
-                        await context.bot.send_message(
-                            chat_id=boss_id,
-                            text=notification["text"],
-                            reply_markup=notification["reply_markup"],
-                            parse_mode=ParseMode.HTML
+                        row_index = len(all_records) - 1
+                        action_id = g_sheets.register_pending_action(
+                            row_index=row_index,
+                            tg_user_id=user_id,
+                            submission_time=data_to_write['submission_time'],
                         )
-                        logger.info(f"Админ уведомлен о новой заявке от пользователя {user_id}")
-                    else:
-                        logger.error("❌ Не удалось получить обновленные данные таблицы")
-                except Exception as e:
-                    logger.error(f"Не удалось уведомить админа о новой заявке: {e}")
-                    # Логируем детали для отладки
-                    logger.error(f"data_to_write содержит: {data_to_write}")
-                    import traceback
-                    logger.error(f"Трейсбек ошибки: {traceback.format_exc()}")
+                        logger.info(f"📊 row_index={row_index}, action_id={action_id}")
+
+                notification = admin_handlers.format_admin_notification(
+                    data_to_write, row_index, action_id=action_id
+                )
+                prefix = "" if google_success else (
+                    "⚠️ <b>ВНИМАНИЕ:</b> заявка не записана в Google Sheets (API недоступен).\n"
+                    "Кнопки одобрения/отклонения станут активны после ручной синхронизации.\n\n"
+                )
+                await context.bot.send_message(
+                    chat_id=boss_id,
+                    text=prefix + notification["text"],
+                    reply_markup=notification["reply_markup"] if google_success else None,
+                    parse_mode=ParseMode.HTML,
+                )
+                logger.info(f"Админ уведомлен о новой заявке от пользователя {user_id}")
+            except Exception as e:
+                logger.error(f"Не удалось уведомить админа о новой заявке: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
     else:
         status_text = "\n\n<b>Статус:</b> ❌ Ошибка! Не удалось сохранить заявку. Попробуйте позже."
     

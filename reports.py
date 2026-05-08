@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import logging
 import os
+import asyncio
 from datetime import datetime, timedelta
 from telegram.ext import ContextTypes
 from telegram.constants import ParseMode
@@ -19,7 +20,7 @@ async def send_daily_summary(context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     logger.info("Generating daily summary...")
-    all_cards = g_sheets.get_cards_from_sheet(user_id=None)
+    all_cards = await asyncio.to_thread(g_sheets.get_cards_from_sheet, user_id=None)
     
     if not all_cards:
         await context.bot.send_message(chat_id=boss_id, text="📄 Ежедневный отчет: За последние 24 часа не было активности.")
@@ -58,7 +59,7 @@ async def send_user_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Отправляет напоминания неактивным пользователям."""
     logger.info("Checking for users to send reminders...")
     
-    users_for_reminder = utils.get_users_for_reminder()
+    users_for_reminder = await asyncio.to_thread(utils.get_users_for_reminder)
     
     if not users_for_reminder:
         logger.info("No users need reminders at this time.")
@@ -82,7 +83,7 @@ async def send_user_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
             )
             
             # Обновляем время последней активности, чтобы не спамить
-            utils.update_user_activity(user['tg_id'])
+            await asyncio.to_thread(utils.update_user_activity, user['tg_id'])
             
             logger.info(f"Sent reminder to user {user['tg_id']}")
             
@@ -101,7 +102,7 @@ async def send_weekly_analytics(context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.info("Generating weekly analytics...")
     
     # Получаем статистику из локальной БД (быстрее)
-    stats = utils.get_statistics()
+    stats = await asyncio.to_thread(utils.get_statistics)
     
     if not stats:
         await context.bot.send_message(
@@ -112,7 +113,7 @@ async def send_weekly_analytics(context: ContextTypes.DEFAULT_TYPE) -> None:
     
     # Получаем данные за неделю
     week_ago = datetime.now() - timedelta(days=7)
-    all_cards = g_sheets.get_cards_from_sheet(user_id=None)
+    all_cards = await asyncio.to_thread(g_sheets.get_cards_from_sheet, user_id=None)
     weekly_cards = []
     
     for card in all_cards:

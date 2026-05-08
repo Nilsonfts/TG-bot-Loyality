@@ -3,6 +3,8 @@
 import logging
 import io
 import csv
+import os
+import asyncio
 from datetime import datetime
 from collections import Counter
 
@@ -22,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 async def show_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Отображает меню настроек."""
-    is_boss = (str(update.effective_user.id) == g_sheets.os.getenv("BOSS_ID"))
+    is_boss = (str(update.effective_user.id) == os.getenv("BOSS_ID"))
     keyboard = keyboards.get_settings_keyboard(is_boss)
     await update.message.reply_text("Меню настроек:", reply_markup=keyboard)
 
@@ -31,7 +33,7 @@ async def back_to_settings_callback(update: Update, context: ContextTypes.DEFAUL
     """Возвращает пользователя в меню настроек из подменю."""
     query = update.callback_query
     await query.answer()
-    is_boss = (str(query.from_user.id) == g_sheets.os.getenv("BOSS_ID"))
+    is_boss = (str(query.from_user.id) == os.getenv("BOSS_ID"))
     keyboard = keyboards.get_settings_keyboard(is_boss)
     await query.edit_message_text("Меню настроек:", reply_markup=keyboard)
 
@@ -55,7 +57,7 @@ async def my_profile_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     await query.answer()
     
     user_id = str(query.from_user.id)
-    user_data = g_sheets.get_initiator_data(user_id)
+    user_data = await asyncio.to_thread(g_sheets.get_initiator_data, user_id)
     
     if not user_data:
         await query.edit_message_text("Не удалось найти ваши данные.", reply_markup=keyboards.get_back_to_settings_keyboard())
@@ -77,9 +79,9 @@ async def stats_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Собирает и отображает статистику."""
     query = update.callback_query
     user_id = str(query.from_user.id)
-    is_boss = (user_id == g_sheets.os.getenv("BOSS_ID"))
+    is_boss = (user_id == os.getenv("BOSS_ID"))
     await query.edit_message_text("📊 Собираю статистику...")
-    cards_data = g_sheets.get_cards_from_sheet(user_id=None if is_boss else user_id)
+    cards_data = await asyncio.to_thread(g_sheets.get_cards_from_sheet, user_id=None if is_boss else user_id)
 
     if not cards_data:
         await query.edit_message_text("Нет данных для статистики.", reply_markup=keyboards.get_back_to_settings_keyboard())
@@ -102,9 +104,9 @@ async def export_csv_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     """Формирует и отправляет CSV файл с заявками."""
     query = update.callback_query
     user_id = str(query.from_user.id)
-    is_boss = (user_id == g_sheets.os.getenv("BOSS_ID"))
+    is_boss = (user_id == os.getenv("BOSS_ID"))
     await query.edit_message_text("📄 Формирую CSV файл...")
-    cards_to_export = g_sheets.get_cards_from_sheet(user_id=None if is_boss else user_id)
+    cards_to_export = await asyncio.to_thread(g_sheets.get_cards_from_sheet, user_id=None if is_boss else user_id)
 
     if not cards_to_export:
         await query.edit_message_text("Нет данных для экспорта.", reply_markup=keyboards.get_back_to_settings_keyboard())
@@ -146,7 +148,7 @@ async def display_paginated_list(update: Update, context: ContextTypes.DEFAULT_T
         text += (f"👤 <b>Владелец:</b> {owner_name}\n📞 Номер: {card.get(SheetCols.CARD_NUMBER_COL, '-')}\n{amount_text}"
                  f"<b>Статус:</b> <code>{card.get(SheetCols.STATUS_COL, '–')}</code>\n📅 {card.get(SheetCols.TIMESTAMP, '-')}\n")
 
-        if str(update.effective_user.id) == g_sheets.os.getenv("BOSS_ID"):
+        if str(update.effective_user.id) == os.getenv("BOSS_ID"):
             text += f"🤵‍♂️ <b>Инициатор:</b> {card.get(SheetCols.FIO_INITIATOR, '-')} ({card.get(SheetCols.TG_TAG, '-')})\n"
         text += "--------------------\n"
 
@@ -166,8 +168,9 @@ async def handle_pagination(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обрабатывает нажатия на кнопки пагинации."""
     query = update.callback_query
     await query.answer()
-    _, data_key, page_str = query.data.split('_')
-    is_boss = (str(update.effective_user.id) == g_sheets.os.getenv("BOSS_ID"))
+    payload = query.data.replace("paginate_", "", 1)
+    data_key, page_str = payload.rsplit('_', 1)
+    is_boss = (str(update.effective_user.id) == os.getenv("BOSS_ID"))
     
     if data_key == 'my_cards':
         list_title = "Все заявки" if is_boss else "Ваши поданные заявки"
@@ -187,10 +190,10 @@ async def my_cards_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     user_id = str(query.from_user.id)
-    is_boss = (user_id == g_sheets.os.getenv("BOSS_ID"))
+    is_boss = (user_id == os.getenv("BOSS_ID"))
     await query.edit_message_text("👑 Загружаю ВСЕ заявки..." if is_boss else "🔍 Загружаю ваши заявки...")
 
-    all_cards = g_sheets.get_cards_from_sheet(user_id=None if is_boss else user_id)
+    all_cards = await asyncio.to_thread(g_sheets.get_cards_from_sheet, user_id=None if is_boss else user_id)
     
     data_key = 'my_cards'
     context.user_data[data_key] = all_cards

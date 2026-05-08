@@ -14,6 +14,63 @@ INITIATOR_DATA_CACHE = {}
 REGISTRATION_STATUS_CACHE = {}
 CACHE_EXPIRATION_SECONDS = 300
 
+# === Реестр админских заявок на согласование ===
+# Хранит соответствие краткого action_id -> {row_index, tg_user_id, submission_time}
+# Используется для НАДЕЖНОГО сопоставления нажатия кнопки админом со строкой
+# в Google Sheets, даже если порядок строк изменился между уведомлением и нажатием.
+PENDING_ACTIONS: dict = {}
+_PENDING_ACTIONS_COUNTER = 0
+
+
+def register_pending_action(row_index: int, tg_user_id: str, submission_time: str) -> str:
+    """Регистрирует ожидающее действие админа и возвращает короткий action_id."""
+    global _PENDING_ACTIONS_COUNTER
+    _PENDING_ACTIONS_COUNTER += 1
+    action_id = f"{int(datetime.datetime.now().timestamp())}{_PENDING_ACTIONS_COUNTER % 1000:03d}"
+    PENDING_ACTIONS[action_id] = {
+        'row_index': row_index,
+        'tg_user_id': str(tg_user_id),
+        'submission_time': submission_time,
+    }
+    # Ограничиваем размер реестра, чтобы не рос бесконечно
+    if len(PENDING_ACTIONS) > 500:
+        for k in sorted(PENDING_ACTIONS.keys())[:100]:
+            PENDING_ACTIONS.pop(k, None)
+    return action_id
+
+
+def resolve_pending_action(action_id: str):
+    """Возвращает (row_index, row_data) для action_id, перепроверяя строку в таблице.
+    Если строка сместилась — ищет по уникальному ключу (TG_ID + submission_time).
+    """
+    record = PENDING_ACTIONS.get(action_id)
+    if not record:
+        return None, None
+
+    rows = get_sheet_data()
+    if not rows:
+        return None, None
+
+    idx = record['row_index']
+    expected_tg = record['tg_user_id']
+    expected_ts = record['submission_time']
+
+    def _matches(row: dict) -> bool:
+        return (
+            str(row.get(SheetCols.TG_ID)) == expected_tg
+            and str(row.get(SheetCols.TIMESTAMP)) == expected_ts
+        )
+
+    if 0 <= idx < len(rows) and _matches(rows[idx]):
+        return idx, rows[idx]
+
+    for i, row in enumerate(rows):
+        if _matches(row):
+            return i, row
+
+    return None, None
+
+
 # get_gspread_client, get_sheet_by_gid остаются такими же "пуленепробиваемыми", как в прошлый раз
 
 def get_gspread_client():
@@ -154,7 +211,10 @@ def get_sheet_data():
 
 def is_user_registered(user_id: str) -> bool:
     if user_id in REGISTRATION_STATUS_CACHE:
-        return True
+        cached_entry = REGISTRATION_STATUS_CACHE[user_id]
+        if (datetime.datetime.now() - cached_entry['timestamp']).total_seconds() < CACHE_EXPIRATION_SECONDS:
+            return True
+        del REGISTRATION_STATUS_CACHE[user_id]
     
     all_records = get_sheet_data()
     for row in all_records:

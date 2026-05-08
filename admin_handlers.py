@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import logging
 import os
+import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
 from telegram.constants import ParseMode
@@ -13,11 +14,13 @@ from constants import (
 
 logger = logging.getLogger(__name__)
 
-def format_admin_notification(row_data: dict, row_index: int) -> dict:
-    """Форматирует сообщение и клавиатуру для уведомления админа."""
-    # Логгируем входные данные для отладки
-    logger.info(f"format_admin_notification вызвана с row_data: {row_data}")
-    logger.info(f"format_admin_notification вызвана с row_index: {row_index}")
+def format_admin_notification(row_data: dict, row_index: int, action_id: str = None) -> dict:
+    """Форматирует сообщение и клавиатуру для уведомления админа.
+
+    action_id — короткий идентификатор, который используется в callback_data
+    кнопок. Если не передан, fallback на row_index (старое поведение).
+    """
+    logger.info(f"format_admin_notification: row_index={row_index}, action_id={action_id}")
     
     # Проверяем, какой формат данных у нас: из Google Sheets или из context.user_data
     if 'initiator_fio' in row_data:
@@ -69,30 +72,57 @@ def format_admin_notification(row_data: dict, row_index: int) -> dict:
     
     logger.info(f"Сформированное уведомление: {text}")
     
+    callback_token = action_id if action_id else str(row_index)
     keyboard = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("✅ Одобрить", callback_data=f"{CALLBACK_APPROVE_PREFIX}{row_index}"),
-            InlineKeyboardButton("❌ Отклонить", callback_data=f"{CALLBACK_REJECT_PREFIX}{row_index}")
+            InlineKeyboardButton("✅ Одобрить", callback_data=f"{CALLBACK_APPROVE_PREFIX}{callback_token}"),
+            InlineKeyboardButton("❌ Отклонить", callback_data=f"{CALLBACK_REJECT_PREFIX}{callback_token}")
         ]
     ])
     
     return {"text": text, "reply_markup": keyboard}
 
+async def _resolve_action(query) -> tuple:
+    """Извлекает row_index и row_data по callback_data.
+    Поддерживает и новый формат (action_id), и старый (числовой row_index).
+    Возвращает (row_index, row_data) или (None, None) при ошибке.
+    """
+    try:
+        token = query.data.split(':', 1)[1]
+    except (IndexError, ValueError):
+        return None, None
+
+    # Новый формат: action_id
+    row_index, row_data = await asyncio.to_thread(g_sheets.resolve_pending_action, token)
+    if row_index is not None:
+        return row_index, row_data
+
+    # Fallback: старый формат row_index числом
+    if token.isdigit():
+        idx = int(token)
+        row_data = await asyncio.to_thread(g_sheets.get_row_data, idx)
+        if row_data:
+            return idx, row_data
+    return None, None
+
+
 async def approve_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обрабатывает одобрение заявки."""
     query = update.callback_query
     await query.answer()
-    
-    try:
-        row_index = int(query.data.split(':')[1])
-        logger.info(f"Одобрение заявки №{row_index + 1} (row_index={row_index})")
-    except (IndexError, ValueError):
-        logger.error(f"Ошибка парсинга callback_data: {query.data}")
-        await query.edit_message_text("Ошибка: неверный формат ID заявки.", reply_markup=None)
+
+    row_index, row_data = await _resolve_action(query)
+    if row_index is None:
+        logger.error(f"Не удалось сопоставить callback_data: {query.data}")
+        await query.edit_message_text(
+            (query.message.text_html or "") + "\n\n<b>❌ Заявка не найдена в таблице.</b>\nВозможно, она была удалена или сдвинута.",
+            parse_mode=ParseMode.HTML, reply_markup=None,
+        )
         return
+    logger.info(f"Одобрение заявки №{row_index + 1} (row_index={row_index})")
 
     # Обновляем статус в Google Sheets
-    success = g_sheets.update_cell_by_row(row_index, SheetCols.STATUS_COL, "Одобрено")
+    success = await asyncio.to_thread(g_sheets.update_cell_by_row, row_index, SheetCols.STATUS_COL, "Одобрено")
 
     if not success:
         logger.error(f"Не удалось обновить статус заявки №{row_index}")
@@ -106,14 +136,14 @@ async def approve_request(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     logger.info(f"Статус заявки №{row_index} успешно обновлен на 'Одобрено'")
 
     # Также обновляем поле одобрения
-    approval_success = g_sheets.update_cell_by_row(row_index, SheetCols.APPROVAL_STATUS, "Одобрено")
+    approval_success = await asyncio.to_thread(g_sheets.update_cell_by_row, row_index, SheetCols.APPROVAL_STATUS, "Одобрено")
     if approval_success:
         logger.info(f"Поле одобрения для заявки №{row_index} обновлено")
     else:
         logger.warning(f"Не удалось обновить поле одобрения для заявки №{row_index}")
 
-    # Получаем данные строки для уведомления пользователя
-    row_data = g_sheets.get_row_data(row_index)
+    if not row_data:
+        row_data = await asyncio.to_thread(g_sheets.get_row_data, row_index)
     tg_id = row_data.get(SheetCols.TG_ID) if row_data else None
     if not row_data:
         logger.error(f"Не найдены данные для строки {row_index} (row_data is None)")
@@ -186,14 +216,16 @@ async def reject_request_start(update: Update, context: ContextTypes.DEFAULT_TYP
     query = update.callback_query
     await query.answer()
 
-    try:
-        row_index = int(query.data.split(':')[1])
-        logger.info(f"Начинаем отклонение заявки №{row_index + 1} (row_index={row_index})")
-    except (IndexError, ValueError):
-        logger.error(f"Ошибка парсинга callback_data: {query.data}")
-        await query.edit_message_text("Ошибка: неверный формат ID заявки.", reply_markup=None)
+    row_index, _row_data = await _resolve_action(query)
+    if row_index is None:
+        logger.error(f"Не удалось сопоставить callback_data: {query.data}")
+        await query.edit_message_text(
+            (query.message.text_html or "") + "\n\n<b>❌ Заявка не найдена в таблице.</b>",
+            parse_mode=ParseMode.HTML, reply_markup=None,
+        )
         return ConversationHandler.END
-        
+    logger.info(f"Начинаем отклонение заявки №{row_index + 1} (row_index={row_index})")
+
     context.user_data['admin_action_row_index'] = row_index
     
     # Обновляем исходное сообщение
@@ -217,7 +249,7 @@ async def reject_request_reason(update: Update, context: ContextTypes.DEFAULT_TY
     reason = update.message.text.strip()
     row_index = context.user_data.get('admin_action_row_index')
     
-    if not row_index:
+    if row_index is None:
         await update.message.reply_text("❌ Произошла ошибка: не найден ID заявки. Попробуйте снова.")
         return ConversationHandler.END
     
@@ -228,20 +260,20 @@ async def reject_request_reason(update: Update, context: ContextTypes.DEFAULT_TY
     logger.info(f"Отклоняем заявку №{row_index} с причиной: {reason}")
     
     # Обновляем статус и причину в Google Sheets
-    status_updated = g_sheets.update_cell_by_row(row_index, SheetCols.STATUS_COL, "Отклонено")
-    reason_updated = g_sheets.update_cell_by_row(row_index, SheetCols.REASON_REJECT, reason)
+    status_updated = await asyncio.to_thread(g_sheets.update_cell_by_row, row_index, SheetCols.STATUS_COL, "Отклонено")
+    reason_updated = await asyncio.to_thread(g_sheets.update_cell_by_row, row_index, SheetCols.REASON_REJECT, reason)
     
     if status_updated and reason_updated:
         logger.info(f"Статус и причина для заявки №{row_index} успешно обновлены")
         await update.message.reply_text(
-            f"✅ <b>Заявка №{row_index} отклонена</b>\n\n"
+            f"✅ <b>Заявка №{row_index + 1} отклонена</b>\n\n"
             f"📝 <b>Причина:</b> {reason}\n\n"
             f"🔔 <i>Уведомление будет отправлено заявителю...</i>",
             parse_mode=ParseMode.HTML
         )
         
         # Получаем данные для уведомления пользователя
-        row_data = g_sheets.get_row_data(row_index)
+        row_data = await asyncio.to_thread(g_sheets.get_row_data, row_index)
         if row_data and row_data.get(SheetCols.TG_ID):
             try:
                 user_id = row_data[SheetCols.TG_ID]
@@ -259,7 +291,7 @@ async def reject_request_reason(update: Update, context: ContextTypes.DEFAULT_TY
                         f"❌ <b>К сожалению, ваша заявка была отклонена.</b>\n\n"
                         f"📝 <b>Причина отклонения:</b>\n"
                         f"<i>{reason}</i>\n\n"
-                        f"� <b>Что делать дальше?</b>\n"
+                        f"ℹ️ <b>Что делать дальше?</b>\n"
                         f"• Изучите причину отклонения\n"
                         f"• Исправьте указанные замечания\n"
                         f"• Подайте новую заявку\n\n"
@@ -274,7 +306,7 @@ async def reject_request_reason(update: Update, context: ContextTypes.DEFAULT_TY
                 await update.message.reply_text(
                     f"📬 <b>Уведомление доставлено!</b>\n\n"
                     f"👤 Пользователь: {user_tag}\n"
-                    f"✅ Уведомление об отклонении заявки №{row_index} успешно отправлено",
+                    f"✅ Уведомление об отклонении заявки №{row_index + 1} успешно отправлено",
                     parse_mode=ParseMode.HTML
                 )
                 

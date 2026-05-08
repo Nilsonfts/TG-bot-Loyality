@@ -8,7 +8,11 @@
 
 import logging
 import os
+import html
+import traceback
 import datetime
+from telegram import Update
+from telegram.constants import ParseMode
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler,
     ConversationHandler, filters
@@ -24,6 +28,7 @@ import settings_handlers
 import admin_handlers
 import reports  # Новый импорт для отчетов
 import utils
+import g_sheets
 
 # --- НАСТРОЙКА СРЕДЫ И ЛОГГИРОВАНИЯ ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -31,7 +36,100 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
+# Снижаем шум от HTTP-клиента в PTB
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("telegram.ext").setLevel(logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+async def global_error_handler(update: object, context) -> None:
+    """Глобальный обработчик исключений: логирует и сообщает админу."""
+    logger.error("Необработанное исключение:", exc_info=context.error)
+    boss_id = os.getenv("BOSS_ID")
+    if not boss_id:
+        return
+    try:
+        tb = "".join(traceback.format_exception(None, context.error, context.error.__traceback__))[-3000:]
+        upd_repr = ""
+        if isinstance(update, Update):
+            who = update.effective_user.id if update.effective_user else "?"
+            upd_repr = f"\nСобытие от пользователя <code>{who}</code>"
+        msg = (
+            f"⚠️ <b>Сбой в боте</b>{upd_repr}\n\n"
+            f"<pre>{html.escape(tb)}</pre>"
+        )
+        await context.bot.send_message(chat_id=boss_id, text=msg, parse_mode=ParseMode.HTML)
+    except Exception as notify_exc:  # noqa: BLE001
+        logger.error(f"Не удалось уведомить админа об ошибке: {notify_exc}")
+
+
+def _admin_only(func):
+    async def wrapper(update, context, *args, **kwargs):
+        boss_id = os.getenv("BOSS_ID")
+        if not boss_id or str(update.effective_user.id) != boss_id:
+            await update.message.reply_text("⛔️ Команда доступна только администратору.")
+            return
+        return await func(update, context, *args, **kwargs)
+    return wrapper
+
+
+@_admin_only
+async def admin_stats_command(update, context):
+    import asyncio
+    stats = await asyncio.to_thread(utils.get_statistics)
+    if not stats or 'error' in stats:
+        await update.message.reply_text("📊 Статистика недоступна.")
+        return
+    by_status = stats.get('by_status', {}) or {}
+    by_type = stats.get('by_card_type', {}) or {}
+    text = [f"<b>📊 Статистика</b>\nВсего заявок: <b>{stats.get('total', 0)}</b>"]
+    if by_status:
+        text.append("\n<b>По статусам:</b>")
+        for k, v in by_status.items():
+            text.append(f"• {k}: <b>{v}</b>")
+    if by_type:
+        text.append("\n<b>По типам карт:</b>")
+        for k, v in by_type.items():
+            text.append(f"• {k}: <b>{v}</b>")
+    await update.message.reply_text("\n".join(text), parse_mode=ParseMode.HTML)
+
+
+@_admin_only
+async def admin_pending_command(update, context):
+    import asyncio
+    pending = await asyncio.to_thread(g_sheets.search_applications_with_status, "На согласовании")
+    count = len(pending)
+    if count == 0:
+        await update.message.reply_text("✅ Ожидающих заявок нет.")
+        return
+    lines = [f"<b>🔥 Ожидает решения: {count}</b>\n"]
+    from constants import SheetCols
+    for r in pending[-15:]:
+        owner = f"{r.get(SheetCols.OWNER_FIRST_NAME_COL,'')} {r.get(SheetCols.OWNER_LAST_NAME_COL,'')}".strip() or '-'
+        lines.append(
+            f"• <b>{owner}</b> | карта <code>{r.get(SheetCols.CARD_NUMBER_COL,'-')}</code> | "
+            f"{r.get(SheetCols.AMOUNT_COL,'-')} | {r.get(SheetCols.TIMESTAMP,'-')}"
+        )
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+
+
+@_admin_only
+async def admin_diag_command(update, context):
+    """Быстрая диагностика Google Sheets и окружения."""
+    import asyncio
+    headers = await asyncio.to_thread(g_sheets.debug_sheet_headers)
+    db_path = utils.get_db_path()
+    has_db = os.path.exists(db_path)
+    text = (
+        "<b>🔧 Диагностика</b>\n"
+        f"• GOOGLE_CREDS_JSON: {'✅' if os.getenv('GOOGLE_CREDS_JSON') else '❌'}\n"
+        f"• GOOGLE_SHEET_KEY: {'✅' if os.getenv('GOOGLE_SHEET_KEY') else '❌'}\n"
+        f"• BOSS_ID: {'✅' if os.getenv('BOSS_ID') else '❌'}\n"
+        f"• Заголовков Sheets: <b>{len(headers) if headers else 0}</b>\n"
+        f"• SQLite файл: {'✅' if has_db else '❌'} (<code>{db_path}</code>)\n"
+        f"• PENDING_ACTIONS в памяти: {len(g_sheets.PENDING_ACTIONS)}"
+    )
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
 
 def main() -> None:
@@ -46,7 +144,12 @@ def main() -> None:
     else:
         logger.warning("Не удалось инициализировать локальную базу данных, работаем только с Google Sheets")
 
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    application = (
+        Application.builder()
+        .token(TELEGRAM_BOT_TOKEN)
+        .concurrent_updates(True)
+        .build()
+    )
 
     # --- Фильтры для кнопок меню ---
     filters_map = {
@@ -121,6 +224,9 @@ def main() -> None:
 
     # --- Добавляем все обработчики в приложение ---
     application.add_handler(CommandHandler("start", navigation_handlers.start_command))
+    application.add_handler(CommandHandler("stats", admin_stats_command))
+    application.add_handler(CommandHandler("pending", admin_pending_command))
+    application.add_handler(CommandHandler("diag", admin_diag_command))
     application.add_handler(MessageHandler(filters_map['main'], navigation_handlers.main_menu_command))
     application.add_handler(MessageHandler(filters_map['settings'], settings_handlers.show_settings))
 
@@ -164,9 +270,12 @@ def main() -> None:
         
         logger.info("Все периодические задачи настроены")
 
+    # Глобальный обработчик исключений
+    application.add_error_handler(global_error_handler)
+
     # --- Запускаем бота ---
     logger.info("Бот запускается с разделенной логикой регистрации...")
-    application.run_polling()
+    application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 
 if __name__ == "__main__":

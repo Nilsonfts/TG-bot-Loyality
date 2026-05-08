@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 
 import logging
+import os
+import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
 
@@ -35,7 +37,7 @@ async def search_field_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Выполняет поиск и отображает результаты."""
     user_id = str(update.effective_user.id)
-    is_boss = (user_id == g_sheets.os.getenv("BOSS_ID"))
+    is_boss = (user_id == os.getenv("BOSS_ID"))
     search_query = utils.sanitize_input(update.message.text.lower().strip(), 100)
     
     if len(search_query) < 2:
@@ -48,7 +50,8 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     search_type = 'name' if search_field == 'search_by_name' else 'phone'
     
     # Сначала пытаемся искать в локальной БД (быстрее)
-    local_results = utils.search_applications_local(
+    local_results = await asyncio.to_thread(
+        utils.search_applications_local,
         query=search_query,
         search_type=search_type,
         user_id=None if is_boss else user_id
@@ -76,7 +79,7 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         logger.info(f"Найдено {len(results)} результатов в локальной БД")
     else:
         # Если в локальной БД ничего не найдено, ищем в Google Sheets
-        all_cards = g_sheets.get_cards_from_sheet(user_id=None if is_boss else user_id)
+        all_cards = await asyncio.to_thread(g_sheets.get_cards_from_sheet, user_id=None if is_boss else user_id)
 
         if search_field == 'search_by_name':
             results = [c for c in all_cards if search_query in c.get('Имя владельца карты', '').lower() or search_query in c.get('Фамилия Владельца', '').lower()]
