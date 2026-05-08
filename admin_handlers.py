@@ -159,6 +159,17 @@ async def approve_request(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if not row_data:
         row_data = await asyncio.to_thread(g_sheets.get_row_data, row_index)
     tg_id = row_data.get(SheetCols.TG_ID) if row_data else None
+    submission_time = row_data.get(SheetCols.TIMESTAMP) if row_data else None
+
+    # Синхронизируем статус + подсвечиваем строку в обоих листах (основной + «Ежемесячные»)
+    if tg_id and submission_time:
+        sync_result = await asyncio.to_thread(
+            g_sheets.update_status_everywhere,
+            str(tg_id), str(submission_time), "Одобрено",
+            {SheetCols.APPROVAL_STATUS: "Одобрено"}, True,
+        )
+        logger.info(f"update_status_everywhere(approve) result: {sync_result}")
+
     if not row_data:
         logger.error(f"Не найдены данные для строки {row_index} (row_data is None)")
         return
@@ -291,6 +302,21 @@ async def reject_request_reason(update: Update, context: ContextTypes.DEFAULT_TY
     # Обновляем статус и причину в Google Sheets
     status_updated = await asyncio.to_thread(g_sheets.update_cell_by_row, row_index, SheetCols.STATUS_COL, "Отклонено")
     reason_updated = await asyncio.to_thread(g_sheets.update_cell_by_row, row_index, SheetCols.REASON_REJECT, reason)
+
+    # Синхронизируем статус + подсвечиваем в обоих листах
+    try:
+        _row_for_sync = await asyncio.to_thread(g_sheets.get_row_data, row_index)
+        _tg_id = _row_for_sync.get(SheetCols.TG_ID) if _row_for_sync else None
+        _ts = _row_for_sync.get(SheetCols.TIMESTAMP) if _row_for_sync else None
+        if _tg_id and _ts:
+            sync_result = await asyncio.to_thread(
+                g_sheets.update_status_everywhere,
+                str(_tg_id), str(_ts), "Отклонено",
+                {SheetCols.REASON_REJECT: reason}, True,
+            )
+            logger.info(f"update_status_everywhere(reject) result: {sync_result}")
+    except Exception as _e:
+        logger.error(f"reject sync failed: {_e}")
     
     if status_updated and reason_updated:
         logger.info(f"Статус и причина для заявки №{row_index} успешно обновлены")

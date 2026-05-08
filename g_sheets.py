@@ -192,23 +192,53 @@ def write_row(data: dict) -> bool:
     """
     Универсальная функция, которая записывает данные в строку,
     ориентируясь на заголовки столбцов.
+    Дополнительно:
+    - дублирует заявку в лист «Ежемесячные» (gid из MONTHLY_SHEET_GID),
+      если frequency == 'Ежемесячная'.
     """
     logger.info(f"write_row вызвана с данными: {data}")
-    
+
     client = get_gspread_client()
-    if not client: return False
+    if not client:
+        return False
     sheet = get_sheet_by_gid(client)
-    if not sheet: return False
-    
+    if not sheet:
+        return False
+
+    ok = _write_row_to_sheet(sheet, data)
+    if not ok:
+        return False
+
+    # === Зеркалирование в лист «Ежемесячные» ===
+    try:
+        if str(data.get('frequency', '')).strip().lower() == 'ежемесячная':
+            monthly_gid_raw = (os.getenv('MONTHLY_SHEET_GID') or '').strip()
+            if monthly_gid_raw.isdigit():
+                monthly_sheet = get_sheet_by_gid(client, gid=int(monthly_gid_raw))
+                if monthly_sheet is not None:
+                    mirror_ok = _write_row_to_sheet(monthly_sheet, data)
+                    if mirror_ok:
+                        logger.info("Зеркалирование в лист «Ежемесячные» выполнено.")
+                    else:
+                        logger.warning("Не удалось зеркалировать в «Ежемесячные».")
+                else:
+                    logger.warning(f"Лист «Ежемесячные» с gid={monthly_gid_raw} не найден.")
+            else:
+                logger.info("MONTHLY_SHEET_GID не задан — зеркалирование пропущено.")
+    except Exception as e:
+        logger.error(f"Ошибка зеркалирования в «Ежемесячные»: {e}", exc_info=True)
+
+    return True
+
+
+def _write_row_to_sheet(sheet, data: dict) -> bool:
+    """Внутренний хелпер: пишет одну строку в указанный лист, ориентируясь на заголовки."""
     try:
         headers = sheet.row_values(1)
         if not headers:
             logger.error("Не удалось прочитать заголовки из таблицы.")
             return False
 
-        logger.info(f"Заголовки таблицы: {headers}")
-
-        # Собираем данные в словарь в соответствии с константами
         row_to_write = {
             SheetCols.TIMESTAMP: data.get('submission_time', ''),
             SheetCols.TG_ID: data.get('tg_user_id', ''),
@@ -227,45 +257,34 @@ def write_row(data: dict) -> bool:
             SheetCols.FREQUENCY_COL: data.get('frequency', ''),
             SheetCols.ISSUE_LOCATION_COL: data.get('issue_location', ''),
             SheetCols.STATUS_COL: data.get('status', ''),
-            SheetCols.APPROVAL_STATUS: '',  # Будет заполнено при одобрении
-            SheetCols.START_DATE: '',  # Будет заполнено при активации
-            SheetCols.ACTIVATED: '',  # Будет заполнено при активации
-            SheetCols.REASON_REJECT: data.get('reason_reject', '')  # Причина отказа при отклонении
+            SheetCols.APPROVAL_STATUS: '',
+            SheetCols.START_DATE: '',
+            SheetCols.ACTIVATED: '',
+            SheetCols.REASON_REJECT: data.get('reason_reject', ''),
         }
-        
-        logger.info(f"Подготовленные данные для записи: {row_to_write}")
-        
-        # ИСПРАВЛЕНИЕ: Собираем итоговый список в правильном порядке
-        # Создаём обратный маппинг: заголовок -> значение
+
+        # Сопоставление заголовков с учётом нормализации
+        norm_to_value = {_normalize_header(k): v for k, v in row_to_write.items()}
         final_row = []
         for header in headers:
-            # Ищем соответствующую константу для этого заголовка
-            value = ''
-            for const_value, data_value in row_to_write.items():
-                if const_value == header:
-                    value = data_value or ''  # Заменяем None на пустую строку
-                    break
-            final_row.append(value)
-        
-        logger.info(f"Заголовки ({len(headers)}): {headers}")
-        logger.info(f"Финальная строка ({len(final_row)}): {final_row}")
-        
-        # Проверяем соответствие длин
+            value = norm_to_value.get(_normalize_header(header), '')
+            final_row.append(value if value is not None else '')
+
         if len(final_row) != len(headers):
-            logger.error(f"ОШИБКА: Длина строки ({len(final_row)}) не соответствует количеству заголовков ({len(headers)})")
-            return False
-        
-        api_response = sheet.append_row(final_row, value_input_option='USER_ENTERED')
-        
-        if api_response.get('updates', {}).get('updatedRows', 0) > 0:
-            logger.info(f"Успешно записана строка для пользователя {data.get('tg_user_id')}")
-            return True
-        else:
-            logger.error("API Google не подтвердил запись строки.")
+            logger.error(
+                f"_write_row_to_sheet: длина строки ({len(final_row)}) "
+                f"!= количество заголовков ({len(headers)})"
+            )
             return False
 
+        api_response = sheet.append_row(final_row, value_input_option='USER_ENTERED')
+        if api_response.get('updates', {}).get('updatedRows', 0) > 0:
+            logger.info(f"Строка записана в лист «{sheet.title}».")
+            return True
+        logger.error("API Google не подтвердил запись строки.")
+        return False
     except Exception as e:
-        logger.error(f"Ошибка при записи в таблицу: {e}", exc_info=True)
+        logger.error(f"_write_row_to_sheet ошибка: {e}", exc_info=True)
         return False
 
 
@@ -558,6 +577,123 @@ def get_row_data(row_index: int) -> dict:
     except Exception as e:
         logger.error(f"Ошибка при получении данных строки {row_index}: {e}", exc_info=True)
         return {}
+
+
+# === Подсветка и синхронизация статусов ===
+
+# Цвета для статусов (в формате 0..1)
+_STATUS_COLORS = {
+    "одобрено": {"red": 0.83, "green": 0.94, "blue": 0.83},   # мягкий зелёный
+    "approved": {"red": 0.83, "green": 0.94, "blue": 0.83},
+    "отклонено": {"red": 0.99, "green": 0.85, "blue": 0.85},  # мягкий красный
+    "rejected":  {"red": 0.99, "green": 0.85, "blue": 0.85},
+}
+
+
+def _color_row_in_sheet(sheet, row_index: int, color: dict) -> bool:
+    """Подсвечивает строку (row_index — 0-based в данных, без заголовка)."""
+    try:
+        sheet_row_number = row_index + 2
+        # Диапазон от A до последней колонки
+        last_col_letter = gspread.utils.rowcol_to_a1(1, max(sheet.col_count, 1))
+        # rowcol_to_a1 возвращает 'A1', нужно вытащить буквенную часть
+        col_letters = ''.join(ch for ch in last_col_letter if ch.isalpha())
+        cell_range = f"A{sheet_row_number}:{col_letters}{sheet_row_number}"
+        sheet.format(cell_range, {"backgroundColor": color})
+        return True
+    except Exception as e:
+        logger.error(f"_color_row_in_sheet failed: {e}", exc_info=True)
+        return False
+
+
+def _find_row_in_sheet_by_key(sheet, tg_id: str, submission_time: str):
+    """Возвращает (row_index_0based, row_dict) в указанном листе по ключу TG_ID + TIMESTAMP.
+    Использует нормализацию заголовков, чтобы не зависеть от точного имени колонки.
+    """
+    try:
+        records = sheet.get_all_records()
+    except Exception as e:
+        logger.error(f"_find_row_in_sheet_by_key: get_all_records failed: {e}")
+        return None, None
+
+    if not records:
+        return None, None
+
+    # Карта норм-заголовков для текущего листа
+    headers = sheet.row_values(1)
+    norm_to_actual = {_normalize_header(h): h for h in headers if h}
+
+    tg_actual = norm_to_actual.get(_normalize_header(SheetCols.TG_ID))
+    ts_actual = norm_to_actual.get(_normalize_header(SheetCols.TIMESTAMP))
+    if not tg_actual or not ts_actual:
+        return None, None
+
+    for i, row in enumerate(records):
+        if str(row.get(tg_actual)) == str(tg_id) and str(row.get(ts_actual)) == str(submission_time):
+            return i, row
+    return None, None
+
+
+def update_status_everywhere(tg_id: str, submission_time: str, new_status: str,
+                              extra_updates: dict = None, paint: bool = True) -> dict:
+    """Меняет статус заявки и (опционально) подсвечивает строку
+    одновременно в основном листе и в листе «Ежемесячные» (если задан MONTHLY_SHEET_GID).
+
+    extra_updates: словарь {канонический_заголовок: значение} — будут обновлены те же
+    колонки в обоих листах (например, REASON_REJECT, APPROVAL_STATUS).
+
+    Возвращает {'main': bool, 'monthly': bool|None}.
+    """
+    extra_updates = extra_updates or {}
+    result = {'main': False, 'monthly': None}
+
+    client = get_gspread_client()
+    if not client:
+        return result
+
+    color = _STATUS_COLORS.get(str(new_status).strip().lower()) if paint else None
+
+    def _apply(sheet) -> bool:
+        idx, _ = _find_row_in_sheet_by_key(sheet, tg_id, submission_time)
+        if idx is None:
+            return False
+        # Обновляем статус
+        try:
+            headers = sheet.row_values(1)
+            norm_to_idx = {_normalize_header(h): (i + 1) for i, h in enumerate(headers)}
+
+            def _col(canonical):
+                return norm_to_idx.get(_normalize_header(canonical))
+
+            status_col = _col(SheetCols.STATUS_COL)
+            if status_col:
+                sheet.update_cell(idx + 2, status_col, new_status)
+
+            for canonical, value in extra_updates.items():
+                col = _col(canonical)
+                if col:
+                    sheet.update_cell(idx + 2, col, value)
+
+            if color:
+                _color_row_in_sheet(sheet, idx, color)
+            return True
+        except Exception as e:
+            logger.error(f"update_status_everywhere apply failed: {e}", exc_info=True)
+            return False
+
+    main_sheet = get_sheet_by_gid(client)
+    if main_sheet is not None:
+        result['main'] = _apply(main_sheet)
+
+    monthly_gid_raw = (os.getenv('MONTHLY_SHEET_GID') or '').strip()
+    if monthly_gid_raw.isdigit():
+        monthly_sheet = get_sheet_by_gid(client, gid=int(monthly_gid_raw))
+        if monthly_sheet is not None:
+            result['monthly'] = _apply(monthly_sheet)
+        else:
+            result['monthly'] = False
+
+    return result
 
 def search_applications_with_status(status: str) -> list:
     """
