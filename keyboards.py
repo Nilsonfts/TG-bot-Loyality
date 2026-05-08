@@ -7,7 +7,8 @@ This file contains functions for generating keyboards for the bot.
 from telegram import ReplyKeyboardMarkup, InlineKeyboardMarkup, KeyboardButton, InlineKeyboardButton
 from constants import (
     MENU_TEXT_REGISTER, MENU_TEXT_SUBMIT, MENU_TEXT_SEARCH,
-    MENU_TEXT_SETTINGS, MENU_TEXT_MAIN_MENU
+    MENU_TEXT_SETTINGS, MENU_TEXT_MAIN_MENU, MENU_TEXT_CANCEL_FORM,
+    CITY_OPTIONS,
 )
 
 def get_main_menu_keyboard(is_registered: bool) -> ReplyKeyboardMarkup:
@@ -41,3 +42,19 @@ def get_back_to_settings_keyboard() -> InlineKeyboardMarkup:
     """Returns a keyboard with a single 'Back to settings' button."""
     keyboard = [[InlineKeyboardButton("⬅️ Назад в настройки", callback_data="back_to_settings")]]
     return InlineKeyboardMarkup(keyboard)
+
+
+def get_form_cancel_keyboard() -> ReplyKeyboardMarkup:
+    """Reply-клавиатура, висящая внизу всё время заполнения заявки.
+
+    Позволяет пользователю в любой момент прервать заполнение,
+    не вводя команду /cancel.
+    """
+    keyboard = [[KeyboardButton(MENU_TEXT_CANCEL_FORM)]]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+
+def get_city_keyboard() -> InlineKeyboardMarkup:
+    """Inline-клавиатура для выбора Города/Бара (шаг ISSUE_LOCATION)."""
+    rows = [[InlineKeyboardButton(city, callback_data=f"city:{city}")] for city in CITY_OPTIONS]
+    return InlineKeyboardMarkup(rows)

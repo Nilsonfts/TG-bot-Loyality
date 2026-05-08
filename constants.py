@@ -10,7 +10,19 @@ MENU_TEXT_SUBMIT = "✍️ Подать заявку"
 MENU_TEXT_SEARCH = "🔍 Поиск"
 MENU_TEXT_SETTINGS = "⚙️ Настройки"
 MENU_TEXT_MAIN_MENU = "🏠 Главное меню"
+MENU_TEXT_CANCEL_FORM = "❌ Отменить заполнение"
 CARDS_PER_PAGE = 7
+
+# --- Доступные значения "Город/Бар" для шага ISSUE_LOCATION ---
+CITY_OPTIONS = [
+    "ЕВГ_СПБ_НЕВ",
+    "ЕВГ_СПБ_РУБ",
+    "ЕВГ_МСК_ПЯТ",
+    "ЕВГ_МСК_ЦВЕТ",
+    "ЕВГ_ЧЕХ",
+    "ЕВГ_КЗН",
+    "ЕВГ_САМ",
+]
 
 # --- State Constants for Conversation Handlers ---
 (

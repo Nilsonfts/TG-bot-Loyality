@@ -11,12 +11,14 @@ from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, ConversationHandler
 
 import g_sheets
+import keyboards
 import navigation_handlers
 import admin_handlers
 import utils
 from constants import (
     OWNER_LAST_NAME, OWNER_FIRST_NAME, REASON, CARD_TYPE, CARD_NUMBER, CATEGORY,
-    AMOUNT, FREQUENCY, ISSUE_LOCATION, CONFIRMATION
+    AMOUNT, FREQUENCY, ISSUE_LOCATION, CONFIRMATION,
+    CITY_OPTIONS,
 )
 
 logger = logging.getLogger(__name__)
@@ -78,9 +80,10 @@ async def start_form_conversation(update: Update, context: ContextTypes.DEFAULT_
     
     await update.message.reply_text(
         "📝 <b>Начинаем подачу новой заявки</b>\n\n"
+        "В любой момент можно прервать заполнение кнопкой ниже или командой /cancel.\n\n"
         "Введите <b>Фамилию</b> владельца карты:",
         parse_mode=ParseMode.HTML,
-        reply_markup=ReplyKeyboardRemove()
+        reply_markup=keyboards.get_form_cancel_keyboard()
     )
     logger.info(f"📤 Сообщение отправлено, переходим к состоянию OWNER_LAST_NAME")
     return OWNER_LAST_NAME
@@ -156,14 +159,24 @@ async def get_frequency(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     query = update.callback_query
     await query.answer()
     context.user_data['frequency'] = query.data
-    await query.edit_message_text(f"Выбрано: {query.data}.\n\n<b>Город/Бар выдачи?</b>", parse_mode=ParseMode.HTML)
+    await query.edit_message_text(
+        f"Выбрано: {query.data}.\n\n<b>Город/Бар выдачи:</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=keyboards.get_city_keyboard()
+    )
     return ISSUE_LOCATION
 
 async def get_issue_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data['issue_location'] = update.message.text
+    query = update.callback_query
+    await query.answer()
+    city = query.data.split(':', 1)[1] if ':' in query.data else query.data
+    if city not in CITY_OPTIONS:
+        await query.edit_message_text("❌ Неверный выбор города. Попробуйте еще раз.", reply_markup=keyboards.get_city_keyboard())
+        return ISSUE_LOCATION
+    context.user_data['issue_location'] = city
     summary = format_summary(context.user_data)
     keyboard = [[InlineKeyboardButton("✅ Да, все верно", callback_data="submit"), InlineKeyboardButton("❌ Нет, заполнить заново", callback_data="restart")]]
-    await update.message.reply_text(summary, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
+    await query.edit_message_text(summary, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
     return CONFIRMATION
 
 async def submit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:

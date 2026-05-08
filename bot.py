@@ -157,17 +157,19 @@ def main() -> None:
         'submit': filters.Regex(f"^{constants.MENU_TEXT_SUBMIT}$"),
         'search': filters.Regex(f"^{constants.MENU_TEXT_SEARCH}$"),
         'settings': filters.Regex(f"^{constants.MENU_TEXT_SETTINGS}$"),
-        'main': filters.Regex(f"^{constants.MENU_TEXT_MAIN_MENU}$")
+        'main': filters.Regex(f"^{constants.MENU_TEXT_MAIN_MENU}$"),
+        'cancel_form': filters.Regex(f"^{constants.MENU_TEXT_CANCEL_FORM}$"),
     }
 
     combined_menu_filter = (
         filters_map['reg'] | filters_map['submit'] | filters_map['search'] |
-        filters_map['settings'] | filters_map['main']
+        filters_map['settings'] | filters_map['main'] | filters_map['cancel_form']
     )
     text_filter = filters.TEXT & ~filters.COMMAND & ~combined_menu_filter
 
     # --- Обработчики отмены и возврата в меню ---
     fallback_handler = MessageHandler(filters_map['main'], navigation_handlers.end_conversation_and_show_menu)
+    cancel_form_handler = MessageHandler(filters_map['cancel_form'], navigation_handlers.end_conversation_and_show_menu)
     cancel_handler = CommandHandler("cancel", navigation_handlers.cancel)
 
     # --- ДИАЛОГ РЕГИСТРАЦИИ ---
@@ -179,7 +181,7 @@ def main() -> None:
             constants.REGISTER_EMAIL: [MessageHandler(text_filter, registration_handlers.get_email)],
             constants.REGISTER_JOB_TITLE: [MessageHandler(text_filter, registration_handlers.get_job_title_and_finish)],
         },
-        fallbacks=[fallback_handler, cancel_handler],
+        fallbacks=[fallback_handler, cancel_form_handler, cancel_handler],
     )
 
     # --- ДИАЛОГ ПОДАЧИ ЗАЯВКИ ---
@@ -189,28 +191,28 @@ def main() -> None:
             constants.OWNER_LAST_NAME: [MessageHandler(text_filter, form_handlers.get_owner_last_name)],
             constants.OWNER_FIRST_NAME: [MessageHandler(text_filter, form_handlers.get_owner_first_name)],
             constants.REASON: [MessageHandler(text_filter, form_handlers.get_reason)],
-            constants.CARD_TYPE: [CallbackQueryHandler(form_handlers.get_card_type)],
+            constants.CARD_TYPE: [CallbackQueryHandler(form_handlers.get_card_type, pattern=r"^(Бартер|Скидка)$")],
             constants.CARD_NUMBER: [MessageHandler(text_filter, form_handlers.get_card_number)],
-            constants.CATEGORY: [CallbackQueryHandler(form_handlers.get_category)],
+            constants.CATEGORY: [CallbackQueryHandler(form_handlers.get_category, pattern=r"^(АРТ|МАРКЕТ|Операционный блок|СКИДКА|Сертификат|Учредители)$")],
             constants.AMOUNT: [MessageHandler(text_filter, form_handlers.get_amount)],
-            constants.FREQUENCY: [CallbackQueryHandler(form_handlers.get_frequency)],
-            constants.ISSUE_LOCATION: [MessageHandler(text_filter, form_handlers.get_issue_location)],
+            constants.FREQUENCY: [CallbackQueryHandler(form_handlers.get_frequency, pattern=r"^(Разовая|Дополнить к балансу|Замена номера карты)$")],
+            constants.ISSUE_LOCATION: [CallbackQueryHandler(form_handlers.get_issue_location, pattern=r"^city:")],
             constants.CONFIRMATION: [
                 CallbackQueryHandler(form_handlers.submit, "^submit$"),
                 CallbackQueryHandler(form_handlers.restart_conversation, "^restart$")
             ],
         },
-        fallbacks=[fallback_handler, cancel_handler],
+        fallbacks=[fallback_handler, cancel_form_handler, cancel_handler],
     )
 
     # --- ДИАЛОГ ПОИСКА ---
     search_conv = ConversationHandler(
         entry_points=[MessageHandler(filters_map['search'], search_handlers.search_command)],
         states={
-            constants.SEARCH_CHOOSE_FIELD: [CallbackQueryHandler(search_handlers.search_field_chosen)],
+            constants.SEARCH_CHOOSE_FIELD: [CallbackQueryHandler(search_handlers.search_field_chosen, pattern=r"^search_by_(name|phone)$")],
             constants.AWAIT_SEARCH_QUERY: [MessageHandler(text_filter, search_handlers.perform_search)]
         },
-        fallbacks=[fallback_handler, cancel_handler],
+        fallbacks=[fallback_handler, cancel_form_handler, cancel_handler],
     )
 
     # --- ДИАЛОГ АДМИНСКИХ ДЕЙСТВИЙ ---
@@ -228,6 +230,7 @@ def main() -> None:
     application.add_handler(CommandHandler("pending", admin_pending_command))
     application.add_handler(CommandHandler("diag", admin_diag_command))
     application.add_handler(MessageHandler(filters_map['main'], navigation_handlers.main_menu_command))
+    application.add_handler(MessageHandler(filters_map['cancel_form'], navigation_handlers.end_conversation_and_show_menu))
     application.add_handler(MessageHandler(filters_map['settings'], settings_handlers.show_settings))
 
     application.add_handler(reg_conv) # Новый диалог

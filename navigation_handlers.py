@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import logging
+import asyncio
 from telegram import Update, ReplyKeyboardRemove
 from telegram.ext import ContextTypes, ConversationHandler
 
@@ -20,7 +21,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     # Используем улучшенную функцию проверки регистрации
-    is_registered = g_sheets.is_user_registered(str(user.id))
+    is_registered = await asyncio.to_thread(g_sheets.is_user_registered, str(user.id))
     keyboard = keyboards.get_main_menu_keyboard(is_registered)
 
     # Определяем, как отправлять сообщение (от команды или от кнопки)
@@ -30,7 +31,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     chat_id = user.id
-    text_to_send = "Вы в главном меню:" if is_registered else "Здравствуйте! Для начала работы, подайте вашу первую заявку."
+    text_to_send = "Вы в главном меню:" if is_registered else "Здравствуйте! Для начала работы пройдите регистрацию, нажав кнопку ниже."
 
     # --- ИЗМЕНЕНИЕ ЛОГИКИ ---
     # Мы больше не удаляем предыдущее сообщение.

@@ -57,9 +57,14 @@ def format_admin_notification(row_data: dict, row_index: int, action_id: str = N
         issue_location = "Не указан"
     
     amount_text = f"{amount_val}{'%' if card_type_str == 'Скидка' else ' ₽'}"
-    
+
+    if isinstance(row_index, int) and row_index >= 0:
+        title = f"🔔 <b>Новая заявка на согласование (№{row_index + 1})</b> 🔔"
+    else:
+        title = "🔔 <b>Новая заявка на согласование</b> 🔔"
+
     text = (
-        f"🔔 <b>Новая заявка на согласование (№{row_index + 1})</b> 🔔\n\n"
+        f"{title}\n\n"
         f"<b>Инициатор:</b> {initiator_info}\n"
         f"<b>Владелец карты:</b> {owner_info}\n"
         f"<b>Номер карты:</b> <code>{card_number}</code>\n"
@@ -71,15 +76,24 @@ def format_admin_notification(row_data: dict, row_index: int, action_id: str = N
     )
     
     logger.info(f"Сформированное уведомление: {text}")
-    
-    callback_token = action_id if action_id else str(row_index)
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("✅ Одобрить", callback_data=f"{CALLBACK_APPROVE_PREFIX}{callback_token}"),
-            InlineKeyboardButton("❌ Отклонить", callback_data=f"{CALLBACK_REJECT_PREFIX}{callback_token}")
-        ]
-    ])
-    
+
+    if action_id:
+        callback_token = action_id
+    elif isinstance(row_index, int) and row_index >= 0:
+        callback_token = str(row_index)
+    else:
+        callback_token = None
+
+    if callback_token is not None:
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("✅ Одобрить", callback_data=f"{CALLBACK_APPROVE_PREFIX}{callback_token}"),
+                InlineKeyboardButton("❌ Отклонить", callback_data=f"{CALLBACK_REJECT_PREFIX}{callback_token}")
+            ]
+        ])
+    else:
+        keyboard = None
+
     return {"text": text, "reply_markup": keyboard}
 
 async def _resolve_action(query) -> tuple:
