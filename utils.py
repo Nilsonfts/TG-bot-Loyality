@@ -355,8 +355,8 @@ def update_user_activity(tg_id: str) -> bool:
         logger.error(f"Ошибка при обновлении активности пользователя {tg_id}: {e}")
         return False
 
-def cleanup_old_cache() -> None:
-    """Очищает устаревший кэш из памяти."""
+def cleanup_old_cache(context=None) -> None:
+    """Очищает устаревший кэш из памяти. Принимает context от JobQueue."""
     try:
         import g_sheets
         current_time = datetime.now()
@@ -384,8 +384,8 @@ def cleanup_old_cache() -> None:
     except Exception as e:
         logger.error(f"Ошибка при очистке кэша: {e}")
 
-def backup_local_db() -> bool:
-    """Создает резервную копию локальной базы данных."""
+def backup_local_db(context=None) -> bool:
+    """Создает резервную копию локальной базы данных. Принимает context от JobQueue."""
     try:
         db_path = get_db_path()
         backup_path = os.path.join(os.getcwd(), f'bot_data_backup_{datetime.now().strftime("%Y%m%d_%H%M%S")}.db')
