@@ -18,7 +18,7 @@ import utils
 from constants import (
     OWNER_LAST_NAME, OWNER_FIRST_NAME, REASON, CARD_TYPE, CARD_NUMBER, CATEGORY,
     AMOUNT, FREQUENCY, ISSUE_LOCATION, CONFIRMATION,
-    CITY_OPTIONS,
+    CITY_OPTIONS, CARD_TYPE_OPTIONS, FREQUENCY_OPTIONS,
 )
 
 logger = logging.getLogger(__name__)
@@ -26,9 +26,10 @@ logger = logging.getLogger(__name__)
 def format_summary(data: dict) -> str:
     """Форматирует итоговое сообщение перед отправкой."""
     owner = f"{data.get('owner_first_name', '')} {data.get('owner_last_name', '')}".strip()
-    card_type = data.get('card_type')
-    amount_label = 'Скидка' if card_type == 'Скидка' else 'Сумма'
-    amount_unit = '%' if card_type == 'Скидка' else ' ₽'
+    card_type = data.get('card_type') or ''
+    is_discount = (card_type == 'Скидка')
+    amount_label = 'Скидка' if is_discount else 'Сумма'
+    amount_unit = '%' if is_discount else ' ₽'
     return (f"<b>Пожалуйста, проверьте итоговую заявку:</b>\n\n"
             f"--- <b>Инициатор</b> ---\n"
             f"👤 ФИО: {data.get('initiator_fio', '-')}\n"
@@ -110,7 +111,7 @@ async def get_owner_first_name(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def get_reason(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data['reason'] = update.message.text
-    keyboard = [[InlineKeyboardButton("Бартер", callback_data="Бартер"), InlineKeyboardButton("Скидка", callback_data="Скидка")]]
+    keyboard = [[InlineKeyboardButton(opt, callback_data=opt)] for opt in CARD_TYPE_OPTIONS]
     await update.message.reply_text("Тип карты?", reply_markup=InlineKeyboardMarkup(keyboard))
     return CARD_TYPE
 
@@ -137,21 +138,22 @@ async def get_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     query = update.callback_query
     await query.answer()
     context.user_data['category'] = query.data
-    prompt = "Сумма бартера?" if context.user_data['card_type'] == "Бартер" else "Процент скидки?"
+    card_type = context.user_data.get('card_type', '')
+    prompt = "Процент скидки?" if card_type == "Скидка" else "Сумма бартера?"
     await query.edit_message_text(f"Статья: {query.data}.\n\n{prompt}")
     return AMOUNT
 
 async def get_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     amount_text = update.message.text.strip()
     card_type = context.user_data.get('card_type', '')
-    
+
     is_valid, error_msg = utils.validate_amount(amount_text, card_type)
     if not is_valid:
         await update.message.reply_text(f"❌ {error_msg}\n\nПопробуйте еще раз:")
         return AMOUNT
-    
+
     context.user_data['amount'] = amount_text
-    keyboard = [[InlineKeyboardButton("Разовая", callback_data="Разовая")], [InlineKeyboardButton("Дополнить к балансу", callback_data="Дополнить к балансу")], [InlineKeyboardButton("Замена номера карты", callback_data="Замена номера карты")]]
+    keyboard = [[InlineKeyboardButton(opt, callback_data=opt)] for opt in FREQUENCY_OPTIONS]
     await update.message.reply_text("Периодичность?", reply_markup=InlineKeyboardMarkup(keyboard))
     return FREQUENCY
 

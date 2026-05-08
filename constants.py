@@ -24,6 +24,20 @@ CITY_OPTIONS = [
     "ЕВГ_САМ",
 ]
 
+# --- Доступные значения "Тип карты" для шага CARD_TYPE ---
+CARD_TYPE_OPTIONS = [
+    "Бартер сотрудники",
+    "Бартер маркетинг",
+    "Скидка",
+]
+
+# --- Доступные значения "Периодичность" для шага FREQUENCY ---
+FREQUENCY_OPTIONS = [
+    "Разовая",
+    "Ежемесячная",
+    "Дополнить к балансу",
+]
+
 # --- State Constants for Conversation Handlers ---
 (
     # Registration States

@@ -191,11 +191,11 @@ def main() -> None:
             constants.OWNER_LAST_NAME: [MessageHandler(text_filter, form_handlers.get_owner_last_name)],
             constants.OWNER_FIRST_NAME: [MessageHandler(text_filter, form_handlers.get_owner_first_name)],
             constants.REASON: [MessageHandler(text_filter, form_handlers.get_reason)],
-            constants.CARD_TYPE: [CallbackQueryHandler(form_handlers.get_card_type, pattern=r"^(Бартер|Скидка)$")],
+            constants.CARD_TYPE: [CallbackQueryHandler(form_handlers.get_card_type, pattern=r"^(Бартер сотрудники|Бартер маркетинг|Скидка)$")],
             constants.CARD_NUMBER: [MessageHandler(text_filter, form_handlers.get_card_number)],
             constants.CATEGORY: [CallbackQueryHandler(form_handlers.get_category, pattern=r"^(АРТ|МАРКЕТ|Операционный блок|СКИДКА|Сертификат|Учредители)$")],
             constants.AMOUNT: [MessageHandler(text_filter, form_handlers.get_amount)],
-            constants.FREQUENCY: [CallbackQueryHandler(form_handlers.get_frequency, pattern=r"^(Разовая|Дополнить к балансу|Замена номера карты)$")],
+            constants.FREQUENCY: [CallbackQueryHandler(form_handlers.get_frequency, pattern=r"^(Разовая|Ежемесячная|Дополнить к балансу)$")],
             constants.ISSUE_LOCATION: [CallbackQueryHandler(form_handlers.get_issue_location, pattern=r"^city:")],
             constants.CONFIRMATION: [
                 CallbackQueryHandler(form_handlers.submit, "^submit$"),

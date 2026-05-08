@@ -170,28 +170,38 @@ async def approve_request(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         owner_name = f"{row_data.get(SheetCols.OWNER_FIRST_NAME_COL, '')} {row_data.get(SheetCols.OWNER_LAST_NAME_COL, '')}".strip() or "Не указано"
         card_number = row_data.get(SheetCols.CARD_NUMBER_COL, "Не указан")
         amount = row_data.get(SheetCols.AMOUNT_COL, "Не указана")
-        
-        # Вычисляем ближайший четверг для активации
+        card_type_str = (row_data.get(SheetCols.CARD_TYPE_COL) or "").strip()
+        is_barter = card_type_str.lower().startswith("бартер")
+
         from datetime import datetime, timedelta
-        
-        # Получаем данные администратора, который одобрил
+
+        # Данные админа
         admin_user = query.from_user
         admin_name = f"{admin_user.first_name} {admin_user.last_name or ''}".strip()
         if not admin_name:
             admin_name = admin_user.username or "Руководитель"
-        
-        # Вычисляем ближайший четверг
+
+        # Бартеры пополняются еженедельно по понедельникам, дедлайн заявки до 14:00.
         today = datetime.now()
-        days_until_thursday = (3 - today.weekday()) % 7  # 3 = четверг (понедельник = 0)
-        if days_until_thursday == 0 and today.hour >= 22:  # Если сегодня четверг после 22:00
-            days_until_thursday = 7  # Следующий четверг
-        elif days_until_thursday == 0:  # Если сегодня четверг до 22:00
-            days_until_thursday = 0  # Сегодня вечером
-        
-        next_thursday = today + timedelta(days=days_until_thursday)
-        thursday_date = next_thursday.strftime("%d.%m.%Y")
-        
-        # Отправляем уведомление пользователю
+        days_until_monday = (0 - today.weekday()) % 7  # 0 = понедельник
+        if days_until_monday == 0 and today.hour >= 14:
+            days_until_monday = 7  # сегодня пн после 14:00 → следующий пн
+        next_monday = today + timedelta(days=days_until_monday)
+        monday_date = next_monday.strftime("%d.%m.%Y")
+
+        if is_barter:
+            activation_block = (
+                f"📅 <b>Активация бартера:</b> {monday_date} (понедельник)\n"
+                f"⏰ <b>Напоминаем:</b> бартеры пополняются еженедельно по понедельникам.\n"
+                f"Дедлайн подачи заявки на пополнение — <b>до 14:00 понедельника</b>.\n\n"
+                f"ℹ️ <i>Средства станут доступны после пополнения.</i>"
+            )
+        else:
+            activation_block = (
+                f"ℹ️ <i>Скидка будет активирована в ближайшее время.</i>"
+            )
+
+        # Уведомление пользователю
         await context.bot.send_message(
             chat_id=tg_id,
             text=(
@@ -199,22 +209,27 @@ async def approve_request(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 f"📋 <b>Детали заявки:</b>\n"
                 f"👤 Владелец карты: <b>{owner_name}</b>\n"
                 f"💳 Номер карты: <code>{card_number}</code>\n"
-                f"💰 Сумма/Скидка: <b>{amount}</b>\n\n"
+                f"💰 Сумма/Скидка: <b>{amount}</b>\n"
+                f"✨ Тип: <b>{card_type_str or '—'}</b>\n\n"
                 f"✅ <b>Согласовано:</b> {admin_name}\n"
-                f"📅 <b>Активация:</b> {thursday_date} (четверг) после 22:00\n\n"
-                f"ℹ️ <i>Карта будет активирована автоматически в указанную дату.\n"
-                f"До этого времени средства недоступны для использования.</i>"
+                f"{activation_block}"
             ),
             parse_mode=ParseMode.HTML
         )
         logger.info(f"Уведомление об одобрении отправлено пользователю {tg_id}")
-        
+
         # Подтверждение админу о доставке
         user_tag = row_data.get(SheetCols.TG_TAG, "неизвестно")
         await query.edit_message_text(
-            query.message.text_html + f"\n\n<b>Статус: ✅ ОДОБРЕНО</b>\n📬 <i>Уведомление доставлено пользователю {user_tag}</i>",
+            query.message.text_html
+            + "\n\n<b>Статус: ✅ ОДОБРЕНО</b>"
+            + f"\n📬 <i>Уведомление об одобрении отправлено заявителю {user_tag}.</i>"
+            + (
+                f"\n📅 <i>Указана дата пополнения бартера: {monday_date} (пн до 14:00).</i>"
+                if is_barter else ""
+            ),
             parse_mode=ParseMode.HTML,
-            reply_markup=None
+            reply_markup=None,
         )
     except Exception as e:
         logger.error(f"Ошибка отправки уведомления пользователю {tg_id}: {e}")
