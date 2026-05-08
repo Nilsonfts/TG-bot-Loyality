@@ -12,6 +12,52 @@ from constants import SheetCols
 
 logger = logging.getLogger(__name__)
 
+async def send_monday_barter_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Понедельник 13:00 — напоминание админу: до дедлайна по бартерам 1 час."""
+    boss_id = os.getenv("BOSS_ID")
+    if not boss_id:
+        return
+    try:
+        pending = await asyncio.to_thread(g_sheets.search_applications_with_status, "На согласовании")
+    except Exception as e:
+        logger.error(f"send_monday_barter_reminder: {e}")
+        pending = []
+
+    barter_pending = [
+        r for r in pending
+        if str(r.get(SheetCols.CARD_TYPE_COL, "")).lower().startswith("бартер")
+    ]
+    text_lines = [
+        "⏰ <b>Напоминание: дедлайн по бартерам через 1 час</b>",
+        "",
+        "Бартеры пополняются <b>еженедельно по понедельникам</b>.",
+        "Дедлайн подачи заявок на пополнение — <b>до 14:00 понедельника</b>.",
+        "",
+        f"📊 Сейчас на согласовании всего: <b>{len(pending)}</b>",
+        f"   из них бартер-заявок: <b>{len(barter_pending)}</b>",
+    ]
+    if barter_pending:
+        text_lines.append("")
+        text_lines.append("<b>Бартер-заявки в очереди:</b>")
+        for r in barter_pending[:15]:
+            owner = (
+                f"{r.get(SheetCols.OWNER_FIRST_NAME_COL, '')} "
+                f"{r.get(SheetCols.OWNER_LAST_NAME_COL, '')}"
+            ).strip() or "—"
+            text_lines.append(
+                f"• <b>{owner}</b> — {r.get(SheetCols.AMOUNT_COL, '-')} "
+                f"({r.get(SheetCols.CARD_TYPE_COL, '-')})"
+            )
+        if len(barter_pending) > 15:
+            text_lines.append(f"…ещё {len(barter_pending) - 15}")
+    try:
+        await context.bot.send_message(
+            chat_id=boss_id, text="\n".join(text_lines), parse_mode=ParseMode.HTML
+        )
+    except Exception as e:
+        logger.error(f"send_monday_barter_reminder send failed: {e}")
+
+
 async def send_daily_summary(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Формирует и отправляет ежедневный отчет админу."""
     boss_id = os.getenv("BOSS_ID")

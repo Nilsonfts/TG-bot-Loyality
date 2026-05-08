@@ -14,6 +14,78 @@ INITIATOR_DATA_CACHE = {}
 REGISTRATION_STATUS_CACHE = {}
 CACHE_EXPIRATION_SECONDS = 300
 
+# Кэш карты "канонический заголовок -> реальный заголовок в таблице".
+# Обновляется автоматически при первом обращении и инвалидируется по TTL.
+_HEADER_MAP_CACHE: dict = {}
+_HEADER_MAP_TS: float = 0.0
+_HEADER_MAP_TTL = 600  # 10 минут
+
+
+def _normalize_header(s: str) -> str:
+    """Сводит заголовок к каноническому виду для нечёткого сравнения:
+    убирает все пробельные символы (включая \n, табы, неразрывные), lower-case.
+    """
+    if s is None:
+        return ""
+    return "".join(ch for ch in str(s).lower() if not ch.isspace())
+
+
+def _all_canonical_headers() -> list:
+    """Список всех ожидаемых имён колонок (в SheetCols)."""
+    return [
+        getattr(SheetCols, name) for name in dir(SheetCols)
+        if not name.startswith('_') and isinstance(getattr(SheetCols, name), str)
+    ]
+
+
+def _build_header_map(actual_headers: list) -> dict:
+    """Строит {canonical_value_from_SheetCols -> actual_header_in_sheet} с учётом нормализации."""
+    norm_to_actual = {_normalize_header(h): h for h in actual_headers if h}
+    mapping = {}
+    for canonical in _all_canonical_headers():
+        actual = norm_to_actual.get(_normalize_header(canonical))
+        if actual:
+            mapping[canonical] = actual
+    return mapping
+
+
+def _get_header_map(sheet=None) -> dict:
+    """Возвращает кэшированную карту заголовков. Если кэш протух — обновляет."""
+    global _HEADER_MAP_CACHE, _HEADER_MAP_TS
+    now = datetime.datetime.now().timestamp()
+    if _HEADER_MAP_CACHE and (now - _HEADER_MAP_TS) < _HEADER_MAP_TTL:
+        return _HEADER_MAP_CACHE
+    if sheet is None:
+        client = get_gspread_client()
+        if not client:
+            return {}
+        sheet = get_sheet_by_gid(client)
+        if not sheet:
+            return {}
+    try:
+        headers = sheet.row_values(1)
+        _HEADER_MAP_CACHE = _build_header_map(headers)
+        _HEADER_MAP_TS = now
+        logger.info(f"Header map обновлён: {len(_HEADER_MAP_CACHE)} соответствий")
+    except Exception as e:
+        logger.error(f"Не удалось обновить header map: {e}")
+    return _HEADER_MAP_CACHE
+
+
+def _normalize_row(row: dict, header_map: dict) -> dict:
+    """Дополняет строку каноническими ключами на основе header_map.
+    Не удаляет оригинальные ключи (для обратной совместимости),
+    но добавляет канонические — чтобы код, использующий SheetCols.*, всегда находил данные.
+    """
+    if not header_map:
+        return row
+    out = dict(row)
+    for canonical, actual in header_map.items():
+        if canonical not in out and actual in row:
+            out[canonical] = row[actual]
+    return out
+
+
 # === Реестр админских заявок на согласование ===
 # Хранит соответствие краткого action_id -> {row_index, tg_user_id, submission_time}
 # Используется для НАДЕЖНОГО сопоставления нажатия кнопки админом со строкой
@@ -204,10 +276,77 @@ def get_sheet_data():
     sheet = get_sheet_by_gid(client)
     if not sheet: return []
     try:
-        return sheet.get_all_records()
+        records = sheet.get_all_records()
+        header_map = _get_header_map(sheet)
+        if header_map:
+            records = [_normalize_row(r, header_map) for r in records]
+        return records
     except Exception as e:
         logger.error(f"An unexpected error occurred while fetching data: {e}")
         return []
+
+
+def repair_sheet_headers() -> dict:
+    """Приводит заголовки в листе к каноническим именам из SheetCols.
+
+    - Убирает висячие пробелы / двойные пробелы.
+    - Меняет реальный заголовок на канонический, если они эквивалентны после нормализации.
+    - Добавляет недостающие канонические колонки в конец.
+
+    Возвращает отчёт {renamed: [...], added: [...], untouched: [...]}.
+    """
+    report = {"renamed": [], "added": [], "untouched": [], "error": None}
+    client = get_gspread_client()
+    if not client:
+        report["error"] = "no_client"
+        return report
+    sheet = get_sheet_by_gid(client)
+    if not sheet:
+        report["error"] = "no_sheet"
+        return report
+    try:
+        headers = sheet.row_values(1)
+        norm_to_idx = {_normalize_header(h): i for i, h in enumerate(headers)}
+        new_headers = list(headers)
+
+        # 1. Переименование: для каждого канонического имени, если в таблице есть
+        # «эквивалентный» заголовок но другим написанием — заменить.
+        for canonical in _all_canonical_headers():
+            idx = norm_to_idx.get(_normalize_header(canonical))
+            if idx is None:
+                continue
+            actual = headers[idx]
+            if actual != canonical:
+                new_headers[idx] = canonical
+                report["renamed"].append({"was": actual, "now": canonical})
+            else:
+                report["untouched"].append(canonical)
+
+        # 2. Добавление недостающих
+        present_norms = {_normalize_header(h) for h in new_headers}
+        for canonical in _all_canonical_headers():
+            if _normalize_header(canonical) not in present_norms:
+                new_headers.append(canonical)
+                report["added"].append(canonical)
+                present_norms.add(_normalize_header(canonical))
+
+        # 3. Записываем заголовки одной операцией, если что-то поменялось
+        if new_headers != headers:
+            # Расширяем количество колонок при необходимости
+            if len(new_headers) > sheet.col_count:
+                sheet.add_cols(len(new_headers) - sheet.col_count)
+            sheet.update('A1', [new_headers], value_input_option='USER_ENTERED')
+
+        # Сбрасываем кэш карты заголовков, чтобы пересчитался
+        global _HEADER_MAP_CACHE, _HEADER_MAP_TS
+        _HEADER_MAP_CACHE = {}
+        _HEADER_MAP_TS = 0.0
+
+        return report
+    except Exception as e:
+        logger.error(f"repair_sheet_headers: {e}", exc_info=True)
+        report["error"] = str(e)
+        return report
 
 def is_user_registered(user_id: str) -> bool:
     if user_id in REGISTRATION_STATUS_CACHE:

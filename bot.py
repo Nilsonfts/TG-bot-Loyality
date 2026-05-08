@@ -132,6 +132,80 @@ async def admin_diag_command(update, context):
     await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
 
+@_admin_only
+async def admin_sheet_fix_command(update, context):
+    """Приводит заголовки в Google Sheet к каноническим именам и добавляет недостающие."""
+    import asyncio
+    await update.message.reply_text("🛠 Ремонтирую заголовки Google Sheets...")
+    report = await asyncio.to_thread(g_sheets.repair_sheet_headers)
+
+    if report.get("error"):
+        await update.message.reply_text(f"❌ Ошибка: <code>{html.escape(str(report['error']))}</code>", parse_mode=ParseMode.HTML)
+        return
+
+    renamed = report.get("renamed", [])
+    added = report.get("added", [])
+    untouched = report.get("untouched", [])
+
+    lines = ["<b>✅ Готово.</b>"]
+    if renamed:
+        lines.append(f"\n<b>Переименовано ({len(renamed)}):</b>")
+        for r in renamed[:20]:
+            lines.append(f"• <code>{html.escape(r['was'])}</code> → <code>{html.escape(r['now'])}</code>")
+        if len(renamed) > 20:
+            lines.append(f"…ещё {len(renamed) - 20}")
+    if added:
+        lines.append(f"\n<b>Добавлено ({len(added)}):</b>")
+        for c in added:
+            lines.append(f"• <code>{html.escape(c)}</code>")
+    if not renamed and not added:
+        lines.append("\nНичего менять не пришлось — таблица в порядке.")
+    lines.append(f"\n<i>Без изменений: {len(untouched)} колонок.</i>")
+
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+
+
+async def help_command(update, context):
+    """Справка по командам бота, доступная всем."""
+    is_boss = bool(os.getenv("BOSS_ID")) and str(update.effective_user.id) == os.getenv("BOSS_ID")
+    text = [
+        "<b>📖 Справка по боту</b>\n",
+        "<b>Кнопки главного меню:</b>",
+        f"• {constants.MENU_TEXT_SUBMIT} — подать новую заявку",
+        f"• {constants.MENU_TEXT_SEARCH} — найти существующую заявку",
+        f"• {constants.MENU_TEXT_SETTINGS} — мои заявки, статистика, экспорт",
+        f"• {constants.MENU_TEXT_MAIN_MENU} — вернуться в главное меню",
+        f"• {constants.MENU_TEXT_CANCEL_FORM} — прервать заполнение анкеты\n",
+        "<b>Команды:</b>",
+        "/start — главное меню",
+        "/help — эта справка",
+        "/myid — узнать свой Telegram ID",
+        "/cancel — отменить текущее действие",
+    ]
+    if is_boss:
+        text += [
+            "\n<b>Админ-команды:</b>",
+            "/stats — общая статистика",
+            "/pending — ожидающие согласования",
+            "/diag — диагностика",
+            "/sheet_fix — починить заголовки Google Sheets",
+        ]
+    text += [
+        "\n<i>ℹ️ Бартеры пополняются еженедельно по понедельникам. Дедлайн подачи заявки на пополнение — до 14:00 понедельника.</i>",
+    ]
+    await update.message.reply_text("\n".join(text), parse_mode=ParseMode.HTML)
+
+
+async def myid_command(update, context):
+    """Сообщает пользователю его Telegram ID."""
+    user = update.effective_user
+    await update.message.reply_text(
+        f"🆔 Ваш Telegram ID: <code>{user.id}</code>\n"
+        f"👤 Username: {('@' + user.username) if user.username else '—'}",
+        parse_mode=ParseMode.HTML,
+    )
+
+
 def main() -> None:
     """Инициализирует и запускает бота."""
     if not TELEGRAM_BOT_TOKEN:
@@ -226,9 +300,12 @@ def main() -> None:
 
     # --- Добавляем все обработчики в приложение ---
     application.add_handler(CommandHandler("start", navigation_handlers.start_command))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("myid", myid_command))
     application.add_handler(CommandHandler("stats", admin_stats_command))
     application.add_handler(CommandHandler("pending", admin_pending_command))
     application.add_handler(CommandHandler("diag", admin_diag_command))
+    application.add_handler(CommandHandler("sheet_fix", admin_sheet_fix_command))
     application.add_handler(MessageHandler(filters_map['main'], navigation_handlers.main_menu_command))
     application.add_handler(MessageHandler(filters_map['cancel_form'], navigation_handlers.end_conversation_and_show_menu))
     application.add_handler(MessageHandler(filters_map['settings'], settings_handlers.show_settings))
@@ -264,6 +341,9 @@ def main() -> None:
         
         # Напоминания пользователям по средам в 14:00
         job_queue.run_daily(reports.send_user_reminders, time=datetime.time(hour=14, minute=0), days=(2,))  # 2 = среда
+
+        # Понедельник 13:00 — напоминание админу о дедлайне по бартерам в 14:00
+        job_queue.run_daily(reports.send_monday_barter_reminder, time=datetime.time(hour=13, minute=0), days=(0,))  # 0 = понедельник
         
         # Очистка кэша каждые 6 часов (оборачиваем sync-функцию в async)
         async def _cleanup_cache_job(ctx):

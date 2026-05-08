@@ -10,10 +10,12 @@ from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, ConversationHandler
 
 import g_sheets
+import keyboards
 import navigation_handlers
 import utils
 from constants import (
-    REGISTER_CONTACT, REGISTER_FIO, REGISTER_EMAIL, REGISTER_JOB_TITLE
+    REGISTER_CONTACT, REGISTER_FIO, REGISTER_EMAIL, REGISTER_JOB_TITLE,
+    MENU_TEXT_CANCEL_FORM,
 )
 
 logger = logging.getLogger(__name__)
@@ -21,11 +23,15 @@ logger = logging.getLogger(__name__)
 async def start_registration(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Начинает диалог регистрации нового пользователя."""
     context.user_data.clear()
-    keyboard = [[KeyboardButton("📱 Поделиться контактом", request_contact=True)]]
+    keyboard = [
+        [KeyboardButton("📱 Поделиться контактом", request_contact=True)],
+        [KeyboardButton(MENU_TEXT_CANCEL_FORM)],
+    ]
     await update.message.reply_text(
         "Добро пожаловать! Давайте пройдем быструю регистрацию.\n\n"
-        "Пожалуйста, поделитесь своим контактом, нажав на кнопку ниже.",
-        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+        "Пожалуйста, поделитесь своим контактом, нажав на кнопку ниже.\n"
+        "Отменить можно в любой момент кнопкой ниже или командой /cancel.",
+        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
     )
     return REGISTER_CONTACT
 
@@ -33,7 +39,11 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     contact, user = update.message.contact, update.effective_user
     context.user_data['initiator_phone'] = contact.phone_number.replace('+', '')
     context.user_data['initiator_username'] = f"@{user.username}" if user.username else "–"
-    await update.message.reply_text("✅ Контакт получен!\n\n👤 Введите ваше <b>полное ФИО</b>.", reply_markup=ReplyKeyboardRemove(), parse_mode=ParseMode.HTML)
+    await update.message.reply_text(
+        "✅ Контакт получен!\n\n👤 Введите ваше <b>полное ФИО</b>.",
+        reply_markup=keyboards.get_form_cancel_keyboard(),
+        parse_mode=ParseMode.HTML,
+    )
     return REGISTER_FIO
 
 async def get_fio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
