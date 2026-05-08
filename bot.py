@@ -63,10 +63,33 @@ async def global_error_handler(update: object, context) -> None:
         logger.error(f"Не удалось уведомить админа об ошибке: {notify_exc}")
 
 
+def _get_admin_ids() -> set:
+    """Возвращает множество ID-админов.
+
+    Источники:
+    - BOSS_ID (одно значение, исторический)
+    - ADMIN_IDS (через запятую/пробел)
+    Пробелы/пустые значения игнорируются.
+    """
+    ids: set = set()
+    boss_id = (os.getenv("BOSS_ID") or "").strip()
+    if boss_id:
+        ids.add(boss_id)
+    extra = os.getenv("ADMIN_IDS") or ""
+    for raw in extra.replace(';', ',').replace(' ', ',').split(','):
+        v = raw.strip()
+        if v:
+            ids.add(v)
+    return ids
+
+
+def _is_admin(user_id) -> bool:
+    return str(user_id) in _get_admin_ids()
+
+
 def _admin_only(func):
     async def wrapper(update, context, *args, **kwargs):
-        boss_id = os.getenv("BOSS_ID")
-        if not boss_id or str(update.effective_user.id) != boss_id:
+        if not _is_admin(update.effective_user.id):
             await update.message.reply_text("⛔️ Команда доступна только администратору.")
             return
         return await func(update, context, *args, **kwargs)
@@ -120,11 +143,15 @@ async def admin_diag_command(update, context):
     headers = await asyncio.to_thread(g_sheets.debug_sheet_headers)
     db_path = utils.get_db_path()
     has_db = os.path.exists(db_path)
+    admin_ids = _get_admin_ids()
+    your_id = update.effective_user.id
     text = (
         "<b>🔧 Диагностика</b>\n"
         f"• GOOGLE_CREDS_JSON: {'✅' if os.getenv('GOOGLE_CREDS_JSON') else '❌'}\n"
         f"• GOOGLE_SHEET_KEY: {'✅' if os.getenv('GOOGLE_SHEET_KEY') else '❌'}\n"
-        f"• BOSS_ID: {'✅' if os.getenv('BOSS_ID') else '❌'}\n"
+        f"• BOSS_ID: <code>{html.escape(os.getenv('BOSS_ID') or '—')}</code>\n"
+        f"• ADMIN_IDS (всего админов): <b>{len(admin_ids)}</b> — <code>{html.escape(', '.join(sorted(admin_ids)) or '—')}</code>\n"
+        f"• Ваш ID: <code>{your_id}</code>\n"
         f"• Заголовков Sheets: <b>{len(headers) if headers else 0}</b>\n"
         f"• SQLite файл: {'✅' if has_db else '❌'} (<code>{db_path}</code>)\n"
         f"• PENDING_ACTIONS в памяти: {len(g_sheets.PENDING_ACTIONS)}"
@@ -167,7 +194,7 @@ async def admin_sheet_fix_command(update, context):
 
 async def help_command(update, context):
     """Справка по командам бота, доступная всем."""
-    is_boss = bool(os.getenv("BOSS_ID")) and str(update.effective_user.id) == os.getenv("BOSS_ID")
+    is_boss = _is_admin(update.effective_user.id)
     text = [
         "<b>📖 Справка по боту</b>\n",
         "<b>Кнопки главного меню:</b>",
