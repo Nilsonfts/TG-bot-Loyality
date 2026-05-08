@@ -262,11 +262,19 @@ def main() -> None:
         # Напоминания пользователям по средам в 14:00
         job_queue.run_daily(reports.send_user_reminders, time=datetime.time(hour=14, minute=0), days=(2,))  # 2 = среда
         
-        # Очистка кэша каждые 6 часов
-        job_queue.run_repeating(utils.cleanup_old_cache, interval=21600, first=10)  # 21600 сек = 6 часов
-        
+        # Очистка кэша каждые 6 часов (оборачиваем sync-функцию в async)
+        async def _cleanup_cache_job(ctx):
+            import asyncio as _a
+            await _a.to_thread(utils.cleanup_old_cache)
+
+        async def _backup_db_job(ctx):
+            import asyncio as _a
+            await _a.to_thread(utils.backup_local_db)
+
+        job_queue.run_repeating(_cleanup_cache_job, interval=21600, first=10)  # 21600 сек = 6 часов
+
         # Резервное копирование БД каждый день в 02:00
-        job_queue.run_daily(utils.backup_local_db, time=datetime.time(hour=2, minute=0), days=(0, 1, 2, 3, 4, 5, 6))
+        job_queue.run_daily(_backup_db_job, time=datetime.time(hour=2, minute=0), days=(0, 1, 2, 3, 4, 5, 6))
         
         logger.info("Все периодические задачи настроены")
 
