@@ -199,3 +199,75 @@ async def my_cards_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data[data_key] = all_cards
     list_title = "Все заявки" if is_boss else "Ваши поданные заявки"
     await display_paginated_list(update, context, message_to_edit=query.message, page=0, data_key=data_key, list_title=list_title)
+
+
+async def last_application_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Команда /last — показать последнюю заявку пользователя и её статус."""
+    user_id = str(update.effective_user.id)
+    cards = await asyncio.to_thread(g_sheets.get_cards_from_sheet, user_id=user_id)
+    if not cards:
+        await update.message.reply_text(
+            "🤷 У вас ещё нет поданных заявок.\nНажмите «✍️ Подать заявку», чтобы создать первую."
+        )
+        return
+    # get_cards_from_sheet возвращает в обратном порядке — самая свежая первой
+    last = cards[0]
+    owner = (
+        f"{last.get(SheetCols.OWNER_FIRST_NAME_COL, '')} "
+        f"{last.get(SheetCols.OWNER_LAST_NAME_COL, '')}"
+    ).strip() or "—"
+    card_type = last.get(SheetCols.CARD_TYPE_COL, "—")
+    amount = last.get(SheetCols.AMOUNT_COL, "—")
+    unit = "%" if card_type == "Скидка" else " ₽"
+    status = last.get(SheetCols.STATUS_COL, "—")
+    ts = last.get(SheetCols.TIMESTAMP, "—")
+    text = (
+        "<b>📋 Последняя заявка</b>\n\n"
+        f"👤 Владелец: <b>{owner}</b>\n"
+        f"💳 Карта: <code>{last.get(SheetCols.CARD_NUMBER_COL, '—')}</code>\n"
+        f"✨ Тип: {card_type}\n"
+        f"💰 Сумма/Скидка: {amount}{unit}\n"
+        f"📍 Город/Бар: {last.get(SheetCols.ISSUE_LOCATION_COL, '—')}\n"
+        f"📅 Подана: {ts}\n"
+        f"<b>Статус:</b> <code>{status}</code>"
+    )
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+
+
+async def ack_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработка кнопки «✅ Понятно» под уведомлением заявителю.
+    Убирает кнопку и (опционально) сообщает админу, что заявитель прочитал.
+    """
+    query = update.callback_query
+    await query.answer("Спасибо за подтверждение!", show_alert=False)
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    # Уведомить админа (если указан ADMIN_CONTACT_USERNAME — то есть «главного»)
+    boss_id = os.getenv("BOSS_ID")
+    if not boss_id:
+        return
+    try:
+        # callback_data: ack:<row_index>:<status>
+        parts = query.data.split(":", 2)
+        info = ""
+        if len(parts) == 3:
+            _, row_idx, status = parts
+            info = f" по заявке №{int(row_idx) + 1} (статус: {status})"
+        user = query.from_user
+        tag = f"@{user.username}" if user.username else f"id={user.id}"
+        await context.bot.send_message(
+            chat_id=boss_id,
+            text=f"📬 Заявитель {tag} подтвердил прочтение уведомления{info}.",
+        )
+    except Exception as e:
+        logger.warning(f"ack_callback notify boss failed: {e}")
+
+
+# Отмечаем успешный импорт модуля для продовой диагностики
+try:
+    logger.info("settings_handlers imported successfully")
+except Exception:
+    pass
