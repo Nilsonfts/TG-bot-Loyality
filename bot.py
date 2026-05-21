@@ -333,6 +333,7 @@ def main() -> None:
     application.add_handler(CommandHandler("pending", admin_pending_command))
     application.add_handler(CommandHandler("diag", admin_diag_command))
     application.add_handler(CommandHandler("sheet_fix", admin_sheet_fix_command))
+    application.add_handler(CommandHandler("last", settings_handlers.last_application_command))
     application.add_handler(MessageHandler(filters_map['main'], navigation_handlers.main_menu_command))
     application.add_handler(MessageHandler(filters_map['cancel_form'], navigation_handlers.end_conversation_and_show_menu))
     application.add_handler(MessageHandler(filters_map['settings'], settings_handlers.show_settings))
@@ -354,6 +355,12 @@ def main() -> None:
 
     # Обработчики админских колбэков (отдельно от ConversationHandler для корректной работы)
     application.add_handler(CallbackQueryHandler(admin_handlers.approve_request, f"^{constants.CALLBACK_APPROVE_PREFIX}"))
+
+    # Подтверждение прочтения уведомления заявителем («✅ Понятно»)
+    application.add_handler(CallbackQueryHandler(settings_handlers.ack_callback, pattern=r"^ack:"))
+
+    # Повторная подача заявки на основе ранее одобренной/отклонённой
+    application.add_handler(CallbackQueryHandler(form_handlers.repeat_application_callback, pattern=r"^repeat:"))
     
     # ВАЖНО: CallbackQueryHandler для reject должен быть в ConversationHandler выше!
 
@@ -385,6 +392,9 @@ def main() -> None:
 
         # Резервное копирование БД каждый день в 02:00
         job_queue.run_daily(_backup_db_job, time=datetime.time(hour=2, minute=0), days=(0, 1, 2, 3, 4, 5, 6))
+
+        # Сверка статусов в Google Sheets каждые 5 минут (ловим ручные правки админа)
+        job_queue.run_repeating(reports.reconcile_sheet_statuses, interval=300, first=60)
         
         logger.info("Все периодические задачи настроены")
 
@@ -393,6 +403,10 @@ def main() -> None:
 
     # --- Запускаем бота ---
     logger.info("Бот запускается с разделенной логикой регистрации...")
+    try:
+        logger.info(f"Process PID: {os.getpid()}")
+    except Exception:
+        logger.debug("Не удалось прочитать PID процесса", exc_info=True)
     application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 
