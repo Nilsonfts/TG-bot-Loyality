@@ -346,21 +346,50 @@ def main() -> None:
     application.add_handler(search_conv)
     application.add_handler(admin_conv) # Админский диалог
 
-    # Обработчики колбэков для меню настроек
-    # ... (здесь ваш код для обработчиков кнопок из settings_handlers остается без изменений)
-    application.add_handler(CallbackQueryHandler(settings_handlers.my_cards_command, "^settings_my_cards$"))
-    application.add_handler(CallbackQueryHandler(settings_handlers.help_callback, "^help_show$"))
-    application.add_handler(CallbackQueryHandler(settings_handlers.stats_callback, "^stats_show$"))
-    application.add_handler(CallbackQueryHandler(settings_handlers.export_csv_callback, "^export_csv$"))
-    application.add_handler(CallbackQueryHandler(settings_handlers.back_to_settings_callback, "^back_to_settings$"))
-    application.add_handler(CallbackQueryHandler(settings_handlers.handle_pagination, r"^paginate_"))
-    application.add_handler(CallbackQueryHandler(settings_handlers.noop_callback, r"^noop$"))
+    # Обработчики колбэков для меню настроек (регистрируем только если функции доступны)
+    if hasattr(settings_handlers, 'my_cards_command'):
+        application.add_handler(CallbackQueryHandler(settings_handlers.my_cards_command, "^settings_my_cards$"))
+    else:
+        logger.warning("settings_handlers.my_cards_command not found — handler not registered")
+
+    if hasattr(settings_handlers, 'help_callback'):
+        application.add_handler(CallbackQueryHandler(settings_handlers.help_callback, "^help_show$"))
+    else:
+        logger.warning("settings_handlers.help_callback not found — handler not registered")
+
+    if hasattr(settings_handlers, 'stats_callback'):
+        application.add_handler(CallbackQueryHandler(settings_handlers.stats_callback, "^stats_show$"))
+    else:
+        logger.warning("settings_handlers.stats_callback not found — handler not registered")
+
+    if hasattr(settings_handlers, 'export_csv_callback'):
+        application.add_handler(CallbackQueryHandler(settings_handlers.export_csv_callback, "^export_csv$"))
+    else:
+        logger.warning("settings_handlers.export_csv_callback not found — handler not registered")
+
+    if hasattr(settings_handlers, 'back_to_settings_callback'):
+        application.add_handler(CallbackQueryHandler(settings_handlers.back_to_settings_callback, "^back_to_settings$"))
+    else:
+        logger.warning("settings_handlers.back_to_settings_callback not found — handler not registered")
+
+    if hasattr(settings_handlers, 'handle_pagination'):
+        application.add_handler(CallbackQueryHandler(settings_handlers.handle_pagination, r"^paginate_"))
+    else:
+        logger.warning("settings_handlers.handle_pagination not found — handler not registered")
+
+    if hasattr(settings_handlers, 'noop_callback'):
+        application.add_handler(CallbackQueryHandler(settings_handlers.noop_callback, r"^noop$"))
+    else:
+        logger.warning("settings_handlers.noop_callback not found — handler not registered")
 
     # Обработчики админских колбэков (отдельно от ConversationHandler для корректной работы)
     application.add_handler(CallbackQueryHandler(admin_handlers.approve_request, f"^{constants.CALLBACK_APPROVE_PREFIX}"))
 
     # Подтверждение прочтения уведомления заявителем («✅ Понятно»)
-    application.add_handler(CallbackQueryHandler(settings_handlers.ack_callback, pattern=r"^ack:"))
+    if hasattr(settings_handlers, 'ack_callback'):
+        application.add_handler(CallbackQueryHandler(settings_handlers.ack_callback, pattern=r"^ack:"))
+    else:
+        logger.warning("settings_handlers.ack_callback not found — ack handler not registered")
 
     # Повторная подача заявки на основе ранее одобренной/отклонённой
     application.add_handler(CallbackQueryHandler(form_handlers.repeat_application_callback, pattern=r"^repeat:"))
