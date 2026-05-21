@@ -333,7 +333,10 @@ def main() -> None:
     application.add_handler(CommandHandler("pending", admin_pending_command))
     application.add_handler(CommandHandler("diag", admin_diag_command))
     application.add_handler(CommandHandler("sheet_fix", admin_sheet_fix_command))
-    application.add_handler(CommandHandler("last", settings_handlers.last_application_command))
+    if hasattr(settings_handlers, 'last_application_command'):
+        application.add_handler(CommandHandler("last", settings_handlers.last_application_command))
+    else:
+        logger.warning("settings_handlers.last_application_command not found — команда /last не зарегистрирована")
     application.add_handler(MessageHandler(filters_map['main'], navigation_handlers.main_menu_command))
     application.add_handler(MessageHandler(filters_map['cancel_form'], navigation_handlers.end_conversation_and_show_menu))
     application.add_handler(MessageHandler(filters_map['settings'], settings_handlers.show_settings))
