@@ -203,3 +203,80 @@ async def send_weekly_analytics(context: ContextTypes.DEFAULT_TYPE) -> None:
             analytics_text += f"  - {card_type}: <b>{count}</b>\n"
 
     await context.bot.send_message(chat_id=boss_id, text=analytics_text, parse_mode=ParseMode.HTML)
+
+
+async def reconcile_sheet_statuses(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Сверяет статусы заявок в Google Sheets с локальным снапшотом.
+    Если найдено изменение статуса — обновляет снапшот и уведомляет пользователя.
+    """
+    logger.info("reconcile_sheet_statuses: starting reconciliation")
+    try:
+        rows = await asyncio.to_thread(g_sheets.get_sheet_data)
+        if not rows:
+            logger.info("reconcile_sheet_statuses: no rows fetched")
+            return
+
+        snapshot = utils.get_status_snapshot()
+        changes = []
+
+        for idx, row in enumerate(rows):
+            try:
+                tg_id = str(row.get(SheetCols.TG_ID, '')).strip()
+                ts = str(row.get(SheetCols.TIMESTAMP, '')).strip()
+                status = str(row.get(SheetCols.STATUS_COL, '')).strip()
+                if not tg_id or not ts:
+                    continue
+
+                key = (tg_id, ts)
+                prev = snapshot.get(key)
+                prev_status = prev.get('status') if prev else None
+
+                # Если статус изменился — уведомляем
+                if prev_status and prev_status != status:
+                    changes.append({'tg_id': tg_id, 'timestamp': ts, 'old': prev_status, 'new': status, 'row_index': idx})
+                    # Обновляем снапшот
+                    await asyncio.to_thread(utils.upsert_status_snapshot, tg_id, ts, status, idx)
+                    # Отправляем уведомление пользователю
+                    try:
+                        text = (
+                            f"📣 Статус вашей заявки изменился:\n\n"
+                            f"📅 Подана: {ts}\n"
+                            f"Старый статус: <b>{prev_status}</b>\n"
+                            f"Новый статус: <b>{status}</b>\n"
+                        )
+                        # Добавляем кнопку подтверждения (ack)
+                        reply_markup = None
+                        try:
+                            from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+                            ack_cb = InlineKeyboardButton("✅ Понятно", callback_data=f"ack:{idx}:{status}")
+                            reply_markup = InlineKeyboardMarkup([[ack_cb]])
+                        except Exception:
+                            reply_markup = None
+
+                        await context.bot.send_message(chat_id=int(tg_id), text=text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
+                    except Exception as notify_exc:
+                        logger.warning(f"reconcile: failed to notify user {tg_id}: {notify_exc}")
+
+                elif not prev_status:
+                    # Новая запись — сохраняем в снапшот
+                    await asyncio.to_thread(utils.upsert_status_snapshot, tg_id, ts, status, idx)
+
+            except Exception as row_exc:
+                logger.error(f"reconcile_sheet_statuses: error processing row {idx}: {row_exc}", exc_info=True)
+
+        logger.info(f"reconcile_sheet_statuses: finished, changes found: {len(changes)}")
+
+        # При желании — уведомим админа кратким отчётом
+        if changes:
+            boss_id = os.getenv("BOSS_ID")
+            if boss_id:
+                summary = [f"🔁 Сверка: найдено изменений статусов: {len(changes)}"]
+                for c in changes[:20]:
+                    summary.append(f"• {c['tg_id']} | {c['timestamp']} — {c['old']} → {c['new']}")
+                try:
+                    await context.bot.send_message(chat_id=boss_id, text="\n".join(summary))
+                except Exception:
+                    logger.warning("reconcile_sheet_statuses: failed to notify boss about changes")
+
+    except Exception as e:
+        logger.error(f"reconcile_sheet_statuses failed: {e}", exc_info=True)
