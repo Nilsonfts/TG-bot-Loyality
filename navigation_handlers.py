@@ -2,6 +2,7 @@
 
 import logging
 import asyncio
+import time
 from telegram import Update, ReplyKeyboardRemove
 from telegram.ext import ContextTypes, ConversationHandler
 
@@ -9,6 +10,10 @@ import g_sheets
 import keyboards
 
 logger = logging.getLogger(__name__)
+
+# Простая защита от кратких дублей отправки главного меню на одного пользователя
+LAST_MENU_SENT: dict = {}
+DEBOUNCE_SECONDS = 1.5
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -33,6 +38,16 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     chat_id = user.id
     text_to_send = "Вы в главном меню:" if is_registered else "Здравствуйте! Для начала работы пройдите регистрацию, нажав кнопку ниже."
 
+    # Debounce: если мы уже отправляли меню этому пользователю недавно — пропускаем
+    try:
+        last = LAST_MENU_SENT.get(chat_id)
+        now = time.time()
+        if last and (now - last) < DEBOUNCE_SECONDS:
+            logger.info(f"Пропускаем дублирующую отправку главного меню для {chat_id} (прошло {now-last:.2f}s)")
+            return
+    except Exception:
+        # В редких случаях словарь может содержать неожиданные данные — просто продолжаем
+        logger.debug("Не удалось проверить debounce для start_command", exc_info=True)
     # --- ИЗМЕНЕНИЕ ЛОГИКИ ---
     # Мы больше не удаляем предыдущее сообщение.
     # Просто отправляем новое сообщение с главным меню.
@@ -47,6 +62,12 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     else:
         # Если это команда /start или текстовое сообщение
         await message_sender.reply_text(text_to_send, reply_markup=keyboard)
+
+    # Запоминаем момент последней отправки меню этому пользователю
+    try:
+        LAST_MENU_SENT[chat_id] = time.time()
+    except Exception:
+        logger.debug("Не удалось установить метку последней отправки меню", exc_info=True)
 
 
 async def main_menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
