@@ -18,7 +18,7 @@ import utils
 from constants import (
     OWNER_LAST_NAME, OWNER_FIRST_NAME, REASON, CARD_TYPE, CARD_NUMBER, CATEGORY,
     AMOUNT, FREQUENCY, ISSUE_LOCATION, CONFIRMATION,
-    CITY_OPTIONS, CARD_TYPE_OPTIONS, FREQUENCY_OPTIONS,
+    CITY_OPTIONS, CARD_TYPE_OPTIONS, FREQUENCY_OPTIONS, SheetCols,
 )
 
 logger = logging.getLogger(__name__)
@@ -46,9 +46,15 @@ def format_summary(data: dict) -> str:
 
 async def start_form_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Начинает диалог подачи заявки для УЖЕ ЗАРЕГИСТРИРОВАННОГО пользователя."""
-    context.user_data.clear()
     user_id = str(update.effective_user.id)
-    
+
+    # Проверяем пер-юзер mutex: не позволяем одновременно открывать несколько форм
+    lock = utils.get_user_lock(user_id)
+    if lock.locked():
+        await update.message.reply_text("⚠️ У вас уже идет активное заполнение формы. Пожалуйста, завершите его или нажмите «❌ Отменить заполнение».")
+        return await navigation_handlers.end_conversation_and_show_menu(update, context)
+
+    context.user_data.clear()
     logger.info(f"🔄 Начинаем подачу заявки для пользователя {user_id}")
 
     initiator_data = await asyncio.to_thread(g_sheets.get_initiator_data, user_id)
@@ -213,12 +219,12 @@ async def submit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     # Инициализируем локальную БД если еще не создана
     await asyncio.to_thread(utils.init_local_db)
-    
-    # Сохраняем в локальную БД
-    local_app_id = await asyncio.to_thread(utils.save_application_to_local_db, data_to_write)
-    
-    # Вызываем новую, "умную" функцию записи в Google Sheets
-    google_success = await asyncio.to_thread(g_sheets.write_row, data_to_write)
+
+    # Сохраняем в локальную БД и выполняем запись в Google Sheets под пер-юзер mutex
+    lock = utils.get_user_lock(user_id)
+    async with lock:
+        local_app_id = await asyncio.to_thread(utils.save_application_to_local_db, data_to_write)
+        google_success = await asyncio.to_thread(g_sheets.write_row, data_to_write)
 
     if google_success or local_app_id:
         if google_success:
@@ -279,3 +285,44 @@ async def restart_conversation(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.answer()
     await query.message.delete()
     return await start_form_conversation(update, context)
+
+
+async def repeat_application_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Повторно заполняет форму на основе последней заявки пользователя.
+    Если заявок нет — уведомляет пользователя.
+    """
+    query = update.callback_query
+    await query.answer()
+    user_id = str(query.from_user.id)
+
+    # Получаем последние заявки пользователя
+    cards = await asyncio.to_thread(g_sheets.get_cards_from_sheet, user_id=user_id)
+    if not cards:
+        await query.edit_message_text("🤷 У вас нет предыдущих заявок для повтора.", reply_markup=keyboards.get_back_to_settings_keyboard())
+        return
+
+    last = cards[0]
+
+    # Заполняем context.user_data предзаполненными полями
+    context.user_data.clear()
+    context.user_data.update({
+        'initiator_fio': last.get(SheetCols.FIO_INITIATOR),
+        'initiator_email': last.get(SheetCols.EMAIL),
+        'initiator_job_title': last.get(SheetCols.JOB_TITLE),
+        'initiator_phone': last.get(SheetCols.PHONE_INITIATOR),
+        'initiator_username': last.get(SheetCols.TG_TAG),
+        'owner_last_name': last.get(SheetCols.OWNER_LAST_NAME_COL),
+        'owner_first_name': last.get(SheetCols.OWNER_FIRST_NAME_COL),
+        'card_number': last.get(SheetCols.CARD_NUMBER_COL),
+        'card_type': last.get(SheetCols.CARD_TYPE_COL),
+        'category': last.get(SheetCols.CATEGORY_COL),
+        'amount': last.get(SheetCols.AMOUNT_COL),
+        'frequency': last.get(SheetCols.FREQUENCY_COL),
+        'issue_location': last.get(SheetCols.ISSUE_LOCATION_COL),
+    })
+
+    # Показать итог и предложить подтвердить
+    summary = format_summary(context.user_data)
+    keyboard = [[InlineKeyboardButton("✅ Да, отправить", callback_data="submit"), InlineKeyboardButton("❌ Нет, заполнить заново", callback_data="restart")]]
+    await query.edit_message_text("🔁 Повторная подача — проверьте данные и подтвердите:\n\n" + summary, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
+    return CONFIRMATION

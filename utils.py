@@ -124,6 +124,18 @@ def init_local_db():
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_applications_tg_user_id ON applications(tg_user_id)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_applications_status ON applications(status)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_applications_card_number ON applications(card_number)')
+
+        # Снапшот статусов из Google Sheets — для отслеживания ручных изменений админом
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS sheet_status_snapshot (
+                tg_id TEXT NOT NULL,
+                submission_time TEXT NOT NULL,
+                last_status TEXT,
+                row_index INTEGER,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (tg_id, submission_time)
+            )
+        ''')
         
         conn.commit()
         conn.close()
@@ -384,6 +396,22 @@ def cleanup_old_cache(context=None) -> None:
     except Exception as e:
         logger.error(f"Ошибка при очистке кэша: {e}")
 
+
+# === Пер-юзер mutex (asyncio.Lock) ===
+# Предназначен для предотвращения одновременных конкурирующих действий одного пользователя
+# (например, двойная отправка формы или одновременное открытие диалога).
+import asyncio
+_USER_LOCKS: dict = {}
+
+
+def get_user_lock(user_id: str) -> asyncio.Lock:
+    """Возвращает asyncio.Lock для указанного пользователя (создаёт при необходимости)."""
+    lock = _USER_LOCKS.get(user_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _USER_LOCKS[user_id] = lock
+    return lock
+
 def backup_local_db(context=None) -> bool:
     """Создает резервную копию локальной базы данных. Принимает context от JobQueue."""
     try:
@@ -443,3 +471,45 @@ def get_statistics() -> dict:
     except Exception as e:
         logger.error(f"Ошибка при получении статистики: {e}")
         return {"error": str(e)}
+
+
+# === СНАПШОТ СТАТУСОВ ИЗ GOOGLE SHEETS ===
+
+def get_status_snapshot() -> Dict[tuple, Dict]:
+    """Возвращает снапшот статусов: { (tg_id, submission_time): {status, row_index} }."""
+    try:
+        conn = sqlite3.connect(get_db_path())
+        cur = conn.cursor()
+        cur.execute("SELECT tg_id, submission_time, last_status, row_index FROM sheet_status_snapshot")
+        result = {}
+        for tg_id, ts, status, row_index in cur.fetchall():
+            result[(str(tg_id), str(ts))] = {"status": status, "row_index": row_index}
+        conn.close()
+        return result
+    except Exception as e:
+        logger.error(f"get_status_snapshot error: {e}")
+        return {}
+
+
+def upsert_status_snapshot(tg_id: str, submission_time: str, status: str, row_index: int = None) -> bool:
+    """Создаёт/обновляет запись снапшота для конкретной заявки."""
+    try:
+        conn = sqlite3.connect(get_db_path())
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO sheet_status_snapshot (tg_id, submission_time, last_status, row_index, updated_at)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(tg_id, submission_time) DO UPDATE SET
+                last_status=excluded.last_status,
+                row_index=excluded.row_index,
+                updated_at=CURRENT_TIMESTAMP
+            """,
+            (str(tg_id), str(submission_time), status, row_index),
+        )
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        logger.error(f"upsert_status_snapshot error: {e}")
+        return False
